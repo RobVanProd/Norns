@@ -32,11 +32,10 @@ export class Terrain {
     this.backWall = backWall ?? new Uint8Array(w * h);
   }
 
-  /** Material at (x,y). Outside left/right/bottom edges → IRON-like wall (3); above top → air. */
+  /** Material at (x,y). Outside the left/right edges → IRON-like wall (3); above the top / below the bottom → air. */
   get(x: number, y: number): number {
+    if (y < 0 || y >= this.h) return 0;
     if (x < 0 || x >= this.w) return 3;
-    if (y < 0) return 0;
-    if (y >= this.h) return 0;
     return this.chunks[(y >> CS_SHIFT) * this.cw + (x >> CS_SHIFT)][((y & CS_MASK) << CS_SHIFT) | (x & CS_MASK)];
   }
 

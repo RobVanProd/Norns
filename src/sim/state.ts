@@ -3,7 +3,7 @@
 import type { SkillId } from './constants';
 
 export type WyrdState =
-  | 'walk' | 'fall' | 'land' | 'glide_open' | 'glide' | 'climb' | 'hoist'
+  | 'walk' | 'wait' | 'fall' | 'land' | 'glide_open' | 'glide' | 'climb' | 'hoist'
   | 'warden' | 'weave' | 'shrug' | 'bash' | 'mine' | 'dig' | 'plant'
   | 'leap' | 'tumble' | 'frozen' | 'exit'
   | 'unravel' | 'burn' | 'drown' | 'gone';

@@ -39,7 +39,7 @@ export interface StaticLevel {
 export const SPAWN_START = 40;
 const ENTRANCE_DROP = 22;
 const DEATH_TICKS: Partial<Record<WyrdState, number>> = { unravel: 12, burn: 10, drown: 10 };
-const GROUND_SKILL_STATES: WyrdState[] = ['walk', 'weave', 'shrug', 'bash', 'mine', 'dig'];
+const GROUND_SKILL_STATES: WyrdState[] = ['walk', 'wait', 'weave', 'shrug', 'bash', 'mine', 'dig'];
 
 export { isAlive };
 
@@ -89,6 +89,7 @@ export class Sim {
   /** dynamic solids rebuilt each tick (bodies + frozen wyrdlings) */
   private dyn: number[] = [];
   private wardens: number[] = [];
+  private weavers: number[] = [];
 
   constructor(L: StaticLevel, terrain: Terrain, d: SimData) {
     this.L = L;
@@ -330,7 +331,7 @@ export class Sim {
       case 'warden': return onGround;
       case 'basher': return onGround && w.st !== 'bash';
       case 'miner': return onGround && w.st !== 'mine';
-      case 'leaper': return onGround && (w.st === 'walk' || w.st === 'shrug');
+      case 'leaper': return onGround && (w.st === 'walk' || w.st === 'wait' || w.st === 'shrug');
       case 'blast': return onGround;
     }
   }
@@ -373,9 +374,12 @@ export class Sim {
     this.dyn.length = 0;
     for (const b of d.bodies) if (!b.gone) this.dyn.push(0, b.x, b.y, b.r);
     this.wardens.length = 0;
+    this.weavers.length = 0;
     for (const w of d.wyrds) {
       if (w.st === 'frozen') this.dyn.push(1, w.x, w.y, 0);
+      // wardens turn walkers back; walkers wait behind busy weavers (nobody walks off an unfinished bridge)
       else if (w.st === 'warden') this.wardens.push(w.x, w.y, w.id);
+      else if (w.st === 'weave' || w.st === 'shrug') this.weavers.push(w.x, w.y, w.id, w.dir);
     }
 
     for (const w of d.wyrds) if (w.st !== 'gone') this.updateWyrd(w);
@@ -437,8 +441,18 @@ export class Sim {
     this.emit('freeze', w.x, w.y, w.id);
   }
 
-  private wardenBlocks(w: Wyrd, nx: number): boolean {
-    const ws = this.wardens;
+  /** A busy weaver just ahead (or level with us), building the way we're heading. */
+  private weaverAhead(w: Wyrd): boolean {
+    const ws = this.weavers;
+    for (let i = 0; i < ws.length; i += 4) {
+      if (ws[i + 2] === w.id || ws[i + 3] !== w.dir) continue;
+      const ahead = (ws[i] - w.x) * w.dir;
+      if (ahead >= 0 && ahead <= 5 && Math.abs(ws[i + 1] - w.y) <= 8) return true;
+    }
+    return false;
+  }
+
+  private wardenBlocks(w: Wyrd, nx: number, ws = this.wardens): boolean {
     for (let i = 0; i < ws.length; i += 3) {
       if (ws[i + 2] === w.id) continue;
       const wx = ws[i], wy = ws[i + 1];
@@ -456,8 +470,9 @@ export class Sim {
     const nx = w.x + w.dir;
     const k = this.stackHeight(nx, w.y, STEP_UP);
     if (k > STEP_UP) return 'wall';
-    // head clearance at the destination: a low ceiling stops you like a wall
+    // body clearance at the destination: a low ceiling or a gate hanging just above the floor stops you
     if (k > 0 && this.solid(nx, w.y - k - WYRD_HEIGHT + 2)) return 'wall';
+    if (k === 0 && (this.solid(nx, w.y - 3) || this.solid(nx, w.y - 7))) return 'wall';
     w.x = nx;
     w.y -= k;
     if (k === 0 && !this.solid(w.x, w.y + 1)) {
@@ -498,11 +513,17 @@ export class Sim {
         if (!this.unbury(w)) return;
         if (!this.solid(w.x, w.y + 1)) { this.startFall(w); break; }
         if (this.wardenBlocks(w, w.x + w.dir)) { w.dir = -w.dir as 1 | -1; break; }
+        if (this.weaverAhead(w)) { this.setSt(w, 'wait'); break; }
         const r = this.walkMove(w);
         if (r === 'wall') {
           if (w.climber) this.setSt(w, 'climb');
           else w.dir = -w.dir as 1 | -1;
         } else if (r === 'fall') this.startFall(w);
+        break;
+      }
+      case 'wait': {
+        if (!this.solid(w.x, w.y + 1)) { this.startFall(w); break; }
+        if (!this.weaverAhead(w)) this.setSt(w, 'walk');
         break;
       }
       case 'land':
@@ -554,10 +575,39 @@ export class Sim {
         break;
       }
       case 'climb': {
-        if (!this.solid(w.x + w.dir, w.y) && !this.solid(w.x + w.dir, w.y - 1)) { this.setSt(w, 'hoist'); break; }
+        const d = w.dir;
+        const holdAt = (cx: number) => {
+          for (const off of [d, 2 * d]) {
+            if (this.solid(cx + off, w.y) || this.solid(cx + off, w.y - 1) || this.solid(cx + off, w.y - 5) || this.solid(cx + off, w.y - 9)) return true;
+          }
+          return false;
+        };
+        const freeCol = (cx: number) => {
+          for (let yy = w.y - WYRD_HEIGHT; yy <= w.y; yy++) if (this.solid(cx, yy)) return false;
+          return true;
+        };
+        // stay glued to a rough wall: pick the column nearest the wall with room for the body
+        let col = -9999;
+        for (const cx of [w.x + d, w.x, w.x - d]) {
+          if (freeCol(cx) && holdAt(cx)) { col = cx; break; }
+        }
+        if (col === -9999) {
+          const wallNear = holdAt(w.x) || holdAt(w.x + d);
+          if (!wallNear) { this.setSt(w, 'hoist'); break; }
+          w.dir = -d as 1 | -1;
+          this.startFall(w);
+          break;
+        }
+        w.x = col;
         if (w.t % 2 === 1) {
+          if (w.y - WYRD_HEIGHT - 1 < 0) { w.dir = -d as 1 | -1; this.startFall(w); break; }
           if (this.solid(w.x, w.y - WYRD_HEIGHT - 1)) {
-            w.dir = -w.dir as 1 | -1;
+            // a bump on the wall face: lean out one pixel; a real overhang makes us fall off
+            const out = w.x - d;
+            let ok = !this.solid(out, w.y - WYRD_HEIGHT - 1);
+            for (let yy = w.y - WYRD_HEIGHT; yy <= w.y && ok; yy++) if (this.solid(out, yy)) ok = false;
+            if (ok && holdAt(out)) { w.x = out; w.y--; break; }
+            w.dir = -d as 1 | -1;
             this.startFall(w);
             break;
           }
@@ -820,7 +870,7 @@ export class Sim {
     }
     // exit
     const ex = L.exit;
-    if ((w.st === 'walk' || w.st === 'fall' || w.st === 'glide' || w.st === 'land' || w.st === 'shrug') &&
+    if ((w.st === 'walk' || w.st === 'wait' || w.st === 'fall' || w.st === 'glide' || w.st === 'land' || w.st === 'shrug') &&
         Math.abs(w.x - ex.x) <= 3 && w.y <= ex.y + 2 && w.y >= ex.y - 10 && this.exitOpen) {
       this.setSt(w, 'exit');
       w.x = ex.x;

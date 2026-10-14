@@ -106,6 +106,8 @@ export interface LevelDef {
   entities: EntityDef[];
   boss?: BossDef;
   music?: string;
+  /** override the realm's ambient light (0..1 rgb) — darker for caves */
+  ambient?: [number, number, number];
   /** solution replayed by tests (must reach `target` unless `solutionSaves` says otherwise) */
   solution: SolutionStep[];
   /** minimum saves the scripted solution must reach (default: target) */
@@ -210,10 +212,10 @@ export function buildTerrain(def: LevelDef): Terrain {
         y0 = isGround ? 0 : lim; y1 = isGround ? lim : h;
         sdf = (x, y) => {
           const s = surfaceAt(pts, x + 0.5);
-          if (s === null) return 1;
+          if (s === null) return 1e9;
           const yy = y + 0.5;
-          if (isGround) return yy >= lim ? 1 : s - yy;
-          return yy < lim ? 1 : yy - s;
+          if (isGround) return yy >= lim ? 1e9 : s - yy;
+          return yy < lim ? 1e9 : yy - s;
         };
         break;
       }

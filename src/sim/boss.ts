@@ -436,7 +436,7 @@ function stepHazards(sim: Sim): void {
           h.p = cur;
           for (const w of sim.d.wyrds) {
             if (!isAlive(w)) continue;
-            const grounded = w.st === 'walk' || w.st === 'weave' || w.st === 'bash' || w.st === 'mine' || w.st === 'dig' ||
+            const grounded = w.st === 'walk' || w.st === 'wait' || w.st === 'weave' || w.st === 'bash' || w.st === 'mine' || w.st === 'dig' ||
               w.st === 'shrug' || w.st === 'land' || w.st === 'warden' || w.st === 'plant';
             if (!grounded) continue;
             const dist = Math.abs(w.x - h.x0);
