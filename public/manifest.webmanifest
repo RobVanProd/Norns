@@ -1,0 +1,10 @@
+{
+  "name": "NORNS: Threads of Fate",
+  "short_name": "NORNS",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0d0b14",
+  "theme_color": "#0d0b14",
+  "icons": []
+}

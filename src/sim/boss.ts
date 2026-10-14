@@ -50,7 +50,7 @@ const PATTERNS: Record<string, string[][]> = {
   jotunn: [['icicles', 'breath'], ['icicles', 'slam', 'breath', 'slam'], ['slam', 'icicles', 'breath', 'icicles', 'slam']],
   herald: [['meteors', 'sweep'], ['sweep', 'meteors', 'magma'], ['magma', 'sweep', 'meteors', 'sweep', 'meteors']],
 };
-const COOLDOWN = [150, 120, 90];
+const COOLDOWN = [190, 150, 120];
 
 export function bossStep(sim: Sim): void {
   const b = sim.d.boss;
@@ -159,9 +159,12 @@ function clampX(def: BossDef, x: number): number {
   return Math.max(def.arena.x0 + 8, Math.min(def.arena.x1 - 8, x));
 }
 
-function launch(sim: Sim, kind: ProjectileKind, x: number, y: number, tx: number, ty: number, T: number, g: number): void {
+/** Lob a projectile so its arc peaks `peak` px above the higher of start/target, landing on (tx,ty). */
+function lob(sim: Sim, kind: ProjectileKind, x: number, y: number, tx: number, ty: number, peak: number, g: number): void {
+  const top = Math.min(y, ty) - peak;
+  const vy = -Math.sqrt(2 * g * (y - top));
+  const T = (-vy + Math.sqrt(vy * vy + 2 * g * (ty - y))) / g;
   const vx = (tx - x) / T;
-  const vy = (ty - y) / T - 0.5 * g * T;
   const p: Projectile = { kind, x, y, vx, vy, t: 0, tx, ty, gone: false };
   sim.d.projectiles.push(p);
 }
@@ -181,16 +184,15 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
       const WIND = 24;
       if (b.at < WIND) return false;
       const k = b.at - WIND;
-      const shots = phase === 2 ? 4 : 3;
+      const shots = phase === 0 ? 2 : 3;
       if (k % 9 === 0 && k / 9 < shots) {
         const t = pickTarget(sim, def);
         const mouth = bossEmitter(b);
-        const T = 42;
-        const lead = t ? t.x + (t.st === 'walk' ? t.dir * T : 0) : def.arena.x0 + sim.rand() * (def.arena.x1 - def.arena.x0);
+        const lead = t ? t.x + (t.st === 'walk' ? t.dir * 50 : 0) : def.arena.x0 + sim.rand() * (def.arena.x1 - def.arena.x0);
         const off = (k / 9 - 1) * 26;
         const tx = clampX(def, Math.round(lead + off));
         const ty = surfaceY(sim, tx, top);
-        launch(sim, 'venom', mouth.x, mouth.y, tx, ty, T, gravityOf('venom'));
+        lob(sim, 'venom', mouth.x, mouth.y, tx, ty, 40, gravityOf('venom'));
         sim.emit('venom_spit', mouth.x, mouth.y);
       }
       return k >= shots * 9 + 10;
@@ -327,7 +329,7 @@ function stepProjectiles(sim: Sim): void {
 
 function impact(sim: Sim, p: Projectile, x: number, y: number): void {
   p.gone = true;
-  const killR = p.kind === 'icicle' ? 5 : p.kind === 'meteor' ? 10 : 8;
+  const killR = p.kind === 'icicle' ? 5 : p.kind === 'meteor' ? 8 : 5;
   for (const w of sim.d.wyrds) {
     if (!isAlive(w)) continue;
     const dx = w.x - x, dy = w.y - 5 - y;
@@ -335,7 +337,8 @@ function impact(sim: Sim, p: Projectile, x: number, y: number): void {
   }
   switch (p.kind) {
     case 'venom':
-      sim.carveCircle(x, y, 7);
+      // shallow pock: venom scars the ground but never strands anyone (stays within step height)
+      sim.carveCircle(x, y, 3);
       sim.emit('venom_hit', x, y);
       break;
     case 'icicle': {
@@ -392,8 +395,8 @@ function stepHazards(sim: Sim): void {
             if (isAlive(w) && Math.abs(w.x - h.x0) <= 11 && w.y >= h.y0 - 40 && w.y <= h.y0 + 6) sim.kill(w, 'unravel', 'burrow');
           }
           // carve a shallow crater (escapable: <= step height)
-          sim.carveRect(h.x0 - 13, h.y0 - 2, h.x0 + 13, h.y0 + 6, (x, y) => {
-            const nx = (x - h.x0) / 13, ny = (y - h.y0 + 2) / 8;
+          sim.carveRect(h.x0 - 14, h.y0, h.x0 + 14, h.y0 + 4, (x, y) => {
+            const nx = (x - h.x0) / 14, ny = (y - h.y0 + 1) / 5;
             return nx * nx + ny * ny <= 1;
           });
         }

@@ -803,19 +803,19 @@ export class Sim {
       }
       if (hard) { this.emit('clink', w.x + w.dir * 3, w.y, w.id); this.setSt(w, 'walk'); return; }
     }
-    if (c === 10) {
+    if (c === 4) {
       let n = 0;
       for (let i = 1; i <= 6; i++) {
         const cx = w.x + w.dir * i;
         n += this.carveRect(cx, w.y - 9 + (i >> 1), cx, w.y + (i >> 1));
       }
-      this.emit('mine', w.x + w.dir * 4, w.y, w.id, undefined, n);
+      if (w.t % 16 === 4) this.emit('mine', w.x + w.dir * 4, w.y, w.id, undefined, n);
     }
-    if (c === 12 || c === 14) {
+    if (c === 6 || c === 7) {
       const nx = w.x + w.dir;
       if (this.stackHeight(nx, w.y, STEP_UP) > 2) { this.setSt(w, 'walk'); return; }
       w.x = nx;
-      if (c === 14) w.y++;
+      if (c === 7) w.y++;
       if (!this.unbury(w)) return;
       if (!this.solid(w.x, w.y + 1)) {
         let d = 1;

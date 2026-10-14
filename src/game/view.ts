@@ -54,6 +54,12 @@ function makeLightTexture(): THREE.CanvasTexture {
 }
 
 let sharedAtlas: Atlas | null = null;
+let hoodSuffix = '';
+
+/** Choose the cosmetic hood dye used for Wyrdling sprites ('' = default teal). */
+export function setHood(id: string): void {
+  hoodSuffix = id && id !== 'teal' ? `@${id}` : '';
+}
 let sharedLightTex: THREE.CanvasTexture | null = null;
 
 export function getAtlas(art: ArtBundle): Atlas {
@@ -479,7 +485,7 @@ export class GameView {
       case 'weave': return { key: 'wyrd.weave', i: w.t % 16, dx: 0, dy: 0 };
       case 'shrug': return { key: 'wyrd.shrug', i: Math.min(7, w.t), dx: 0, dy: 0 };
       case 'bash': return { key: 'wyrd.bash', i: w.t % 16, dx: 0, dy: 0 };
-      case 'mine': return { key: 'wyrd.mine', i: w.t % 16, dx: 0, dy: 0 };
+      case 'mine': return { key: 'wyrd.mine', i: ((w.t * 2) + 4) % 16, dx: 0, dy: 0 };
       case 'dig': return { key: 'wyrd.dig', i: w.t % 8, dx: 0, dy: 0 };
       case 'climb': return { key: 'wyrd.climb', i: (w.t >> 1) & 7, dx: -3 * w.dir, dy: 0 };
       case 'hoist': return { key: 'wyrd.hoist', i: Math.min(7, w.t), dx: -3 * w.dir, dy: 0 };
@@ -510,7 +516,8 @@ export class GameView {
       if (hovered && isAlive(w)) {
         o.fr = 1; o.fg = 1; o.fb = 1; o.fa = 0.18 + 0.1 * Math.sin(inp.time * 10);
       }
-      this.actors.push(this.f(an.key, an.i), w.x + an.dx, w.y + an.dy, o);
+      const key = hoodSuffix && this.atlas.has(an.key + hoodSuffix) ? an.key + hoodSuffix : an.key;
+      this.actors.push(this.f(key, an.i), w.x + an.dx, w.y + an.dy, o);
       if (isAlive(w)) {
         if (w.climber && w.glider) {
           this.front.push(this.f('mark.climber'), w.x - 4, w.y - 14);

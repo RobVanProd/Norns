@@ -150,4 +150,45 @@ export const M4: LevelDef = {
   ],
 };
 
-export const MIDGARD: LevelDef[] = [M1, M2, M3, M4];
+export const M5: LevelDef = {
+  id: 'm5', name: 'The Gnawing Wyrm', realm: 'midgard', music: 'boss',
+  intro: 'A wyrm gnaws at the roots of the world. Lead Wyrdlings onto the glowing Seiðr stones — each one wounds it.',
+  hints: [
+    'Only the GLOWING Seiðr stone strikes. When it fires, another lights up elsewhere.',
+    'Red markers show where the Wyrm will strike. Foresight shows who it will hit.',
+    'The Root Gate opens when the Wyrm falls.',
+  ],
+  width: 640, height: 300, seed: 55,
+  wyrdlings: 20, quota: 10, target: 12, rate: 30,
+  skills: { weaver: 4, warden: 3, digger: 2, climber: 2, glider: 2 },
+  ambient: [0.75, 0.7, 0.8],
+  terrain: [
+    { op: 'rect', mat: 'Earth', x: 0, y: 240, w: 420, h: 60, rough: 1 },
+    { op: 'rect', mat: 'Rock', x: 0, y: 264, w: 420, h: 36, rough: 3 },
+    { op: 'poly', mat: 'Rock', pts: [[278, 241], [300, 226], [340, 226], [362, 241]] },
+    { op: 'rect', mat: 'Earth', x: 300, y: 224, w: 40, h: 4 },
+    { op: 'rect', mat: 'Earth', x: 450, y: 216, w: 84, h: 84, rough: 1 },
+    { op: 'rect', mat: 'Rock', x: 450, y: 244, w: 84, h: 56, rough: 3 },
+    { op: 'rect', mat: 'Iron', x: 520, y: 150, w: 14, h: 92 },
+    { op: 'ground', mat: 'Rock', pts: [[534, 236], [580, 228], [640, 232]], rough: 4 },
+    { op: 'ceiling', mat: 'Rock', pts: [[0, 40], [120, 30], [260, 46], [400, 34], [520, 60], [640, 40]], rough: 6, grain: 16 },
+    { op: 'rect', mat: 'Root', x: 0, y: 30, w: 640, h: 16, rough: 5, only: ['Rock'] },
+  ],
+  entities: [
+    { type: 'entrance', x: 70, y: 168 },
+    { type: 'exit', x: 30, y: 239 },
+    { type: 'seidr', x: 200, y: 239 },
+    { type: 'seidr', x: 320, y: 223 },
+    { type: 'seidr', x: 486, y: 215 },
+    { type: 'decor', sprite: 'torch', x: 110, y: 230 },
+    { type: 'decor', sprite: 'torch', x: 400, y: 230 },
+    { type: 'decor', sprite: 'banner', x: 230, y: 50 },
+    { type: 'decor', sprite: 'runestone', x: 508, y: 215 },
+  ],
+  boss: { kind: 'wyrm', x: 584, y: 132, hp: 6, delay: 150, arena: { x0: 12, x1: 512, floorY: 239 } },
+  solution: [
+    { nth: 0, x: 416, dir: 1, skill: 'weaver' },
+  ],
+};
+
+export const MIDGARD: LevelDef[] = [M1, M2, M3, M4, M5];
