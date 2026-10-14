@@ -3,6 +3,7 @@ import type { LevelDef } from '../src/sim/level';
 import { Sim } from '../src/sim/sim';
 import { foresee } from '../src/sim/foresight';
 import { flatLevel } from './helpers';
+import { ALL_LEVELS } from '../src/levels';
 
 function arena(kind: 'wyrm' | 'jotunn' | 'herald'): LevelDef {
   return flatLevel({
@@ -49,7 +50,7 @@ describe('bosses', () => {
   });
 
   it('foresight predicts boss kills that the real sim then produces', () => {
-    const sim = Sim.create(arena('herald'));
+    const sim = Sim.create(ALL_LEVELS.find((l) => l.id === 'u5')!);
     let fate = foresee(sim, 120);
     // advance until foresight predicts at least one death (non-vacuous comparison)
     for (let i = 0; i < 3000 && fate.dead === 0; i++) {

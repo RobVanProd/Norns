@@ -166,4 +166,44 @@ export const U4: LevelDef = {
   ],
 };
 
-export const MUSPELHEIM: LevelDef[] = [U1, U2, U3, U4];
+export const U5: LevelDef = {
+  id: 'u5', name: "Surtr's Herald", realm: 'muspelheim', music: 'boss',
+  intro: "Surtr's Herald bars the last gate with a sword of flame. High ground burns in the sweep; low ground drowns in magma.",
+  hints: [
+    'The flaming sword sweeps one side of the arena. Low ground is safe from it…',
+    '…but when the magma rises, only the high ground survives. Read the warnings.',
+    'Meteors leave craters — and later, boulders.',
+  ],
+  width: 640, height: 320, seed: 75,
+  wyrdlings: 20, quota: 10, target: 13, rate: 30,
+  skills: { climber: 3, leaper: 2, weaver: 3, warden: 2, glider: 2, blast: 2 },
+  ambient: [0.7, 0.52, 0.48],
+  terrain: [
+    { op: 'rect', mat: 'Rock', x: 0, y: 258, w: 520, h: 62, rough: 2 },
+    { op: 'rect', mat: 'Earth', x: 0, y: 256, w: 520, h: 4 },
+    { op: 'rect', mat: 'Rock', x: 278, y: 238, w: 54, h: 20, rough: 0.5 },
+    { op: 'rect', mat: 'Air', x: 396, y: 256, w: 48, h: 20 },
+    { op: 'rect', mat: 'Iron', x: 520, y: 0, w: 16, h: 262 },
+    { op: 'ground', mat: 'Rock', pts: [[536, 310], [600, 306], [640, 310]], rough: 3 },
+    { op: 'ceiling', mat: 'Rock', pts: [[0, 40], [160, 30], [320, 50], [480, 34], [640, 46]], rough: 6, grain: 16 },
+  ],
+  entities: [
+    { type: 'entrance', x: 80, y: 196 },
+    { type: 'exit', x: 26, y: 255 },
+    { type: 'seidr', x: 150, y: 255 },
+    { type: 'seidr', x: 305, y: 237 },
+    { type: 'seidr', x: 420, y: 275 },
+    { type: 'decor', sprite: 'brazier', x: 60, y: 255 },
+    { type: 'decor', sprite: 'brazier', x: 230, y: 255 },
+    { type: 'decor', sprite: 'brazier', x: 480, y: 255 },
+    { type: 'decor', sprite: 'banner', x: 200, y: 52 },
+  ],
+  boss: { kind: 'herald', x: 590, y: 310, hp: 5, delay: 160, arena: { x0: 12, x1: 512, floorY: 255 } },
+  solution: [
+    { nth: 0, skill: 'climber' },
+    { nth: 1, skill: 'climber' },
+    { nth: 2, skill: 'climber' },
+  ],
+};
+
+export const MUSPELHEIM: LevelDef[] = [U1, U2, U3, U4, U5];

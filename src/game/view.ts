@@ -407,10 +407,9 @@ export class GameView {
     // linked gate indicators: a glowing rune on the gate top when its links are satisfied
     // vents
     for (const v of L.vents) {
-      const cx = v.x + v.w / 2;
-      for (let x = v.x; x < v.x + v.w; x += 16) E.push(this.f('vent', Math.floor(time * 16)), x + 8, v.y);
-      if (Math.random() < 0.6 * (v.w / 16)) this.sparks.spawn(v.x + Math.random() * v.w, v.y - 4, 0, -1.2 - Math.random() * 0.8, v.h / 1.6, 0.6, 0.8, 1, 0.35, 1, 0, { drag: 1 });
-      void cx;
+      const on = sim.ventOn(v);
+      for (let x = v.x; x < v.x + v.w; x += 16) E.push(this.f('vent', on ? Math.floor(time * 16) : 0), x + 8, v.y);
+      if (on && Math.random() < 0.6 * (v.w / 16)) this.sparks.spawn(v.x + Math.random() * v.w, v.y - 4, 0, -1.2 - Math.random() * 0.8, v.h / 1.6, 0.6, 0.8, 1, 0.35, 1, 0, { drag: 1 });
     }
     // spikes
     for (const s of L.spikes) for (let x = s.x; x < s.x + s.w; x += 8) E.push(this.f('spikes'), x, s.y);

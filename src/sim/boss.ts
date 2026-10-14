@@ -256,12 +256,12 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     // ---------------- Herald
     case 'sweep': {
       if (b.at === 1) {
-        // sweep the half of the arena holding more wyrdlings
-        const mid = (def.arena.x0 + def.arena.x1) / 2;
-        let left = 0, right = 0;
-        for (const w of targets(sim, def)) { if (w.x < mid) left++; else right++; }
-        const x0 = left >= right ? def.arena.x0 : mid, x1 = left >= right ? mid : def.arena.x1;
-        sim.d.hazards.push(mkHazard('sweep', x0, def.arena.floorY - 32, x1, def.arena.floorY - 4, 48, 24, -1, x1));
+        // sweep a 180 px stretch centred on the median Wyrdling
+        const xs = targets(sim, def).map((w) => w.x).sort((a, c) => a - c);
+        const cx = xs.length ? xs[xs.length >> 1] : (def.arena.x0 + def.arena.x1) / 2;
+        const x0 = Math.max(def.arena.x0, Math.min(def.arena.x1 - 180, cx - 90));
+        // the blade passes low: anything 16+ px up (the dais, a weaver's stair) is safe
+        sim.d.hazards.push(mkHazard('sweep', x0, def.arena.floorY - 16, x0 + 180, def.arena.floorY - 4, 54, 24, -1, x0 + 180));
       }
       return b.at >= 90;
     }
@@ -274,7 +274,7 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     }
     case 'meteors': {
       if (b.at === 1) {
-        const n = phase === 2 ? 4 : 3;
+        const n = phase === 0 ? 2 : 3;
         for (let i = 0; i < n; i++) {
           const t = pickTarget(sim, def);
           const base = t ? t.x + (t.st === 'walk' ? t.dir * 45 : 0) : def.arena.x0 + sim.rand() * (def.arena.x1 - def.arena.x0);
@@ -329,7 +329,7 @@ function stepProjectiles(sim: Sim): void {
 
 function impact(sim: Sim, p: Projectile, x: number, y: number): void {
   p.gone = true;
-  const killR = p.kind === 'icicle' ? 3 : p.kind === 'meteor' ? 8 : 5;
+  const killR = p.kind === 'icicle' ? 3 : 5;
   for (const w of sim.d.wyrds) {
     if (!isAlive(w)) continue;
     const dx = w.x - x, dy = w.y - 5 - y;
@@ -360,9 +360,9 @@ function impact(sim: Sim, p: Projectile, x: number, y: number): void {
     }
     case 'meteor':
     case 'fireball':
-      sim.carveCircle(x, y, 9);
+      sim.carveCircle(x, y - 4, 7);
       sim.emit('meteor', x, y);
-      if (sim.d.boss && bossPhase(sim.d.boss) === 2 && sim.rand() < 0.5) {
+      if (sim.d.boss && bossPhase(sim.d.boss) === 2 && sim.rand() < 0.3) {
         sim.d.bodies.push({ id: sim.d.bodies.length, x, y: y - 16, vx: (sim.rand() - 0.5) * 2, vy: -1, r: 6, a: 0, sleep: 0, gone: false });
       }
       break;
@@ -381,7 +381,7 @@ export function magmaLevel(h: Hazard): number | null {
   if (h.t < h.warn) return null;
   const k = h.t - h.warn;
   const rise = 30, hold = h.dur - 60;
-  const lo = h.y0 + 18, hi = h.y0; // starts below floor, rises to just under it
+  const lo = h.y0 + 20, hi = h.y0 + 4; // starts deep, rises to just under the floor (shallow scars stay safe)
   if (k < rise) return lo + ((hi - lo) * k) / rise;
   if (k < rise + hold) return hi;
   return hi + ((lo - hi) * (k - rise - hold)) / 30;
