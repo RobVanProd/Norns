@@ -20,9 +20,11 @@ uniform vec2 uLevel;
 uniform float uTime;
 out vec4 outColor;
 
+// Outside the level the terrain continues as its edge pixel, so boundary rows never get
+// outlines, caps or hanging decorations as if they were exposed to open air.
+ivec2 clampLevel(ivec2 p) { return clamp(p, ivec2(0), ivec2(uLevel) - 1); }
 int matAt(ivec2 p) {
-  if (p.x < 0 || p.y < 0 || p.x >= int(uLevel.x) || p.y >= int(uLevel.y)) return 0;
-  return int(texelFetch(uMask, p, 0).r * 255.0 + 0.5);
+  return int(texelFetch(uMask, clampLevel(p), 0).r * 255.0 + 0.5);
 }
 vec4 atl(int m, int u, int row) { return texelFetch(uMat, ivec2(m * 64 + u, row), 0); }
 
@@ -41,7 +43,7 @@ void main() {
     vec4 base = atl(m, u, v);
     bool topCap = false, botCap = false;
     // no fresh grass/frost caps on the floor of a tunnel that was just dug
-    bool dugAbove = du <= 8 && texelFetch(uMask, p + ivec2(0, -du), 0).g > 0.75;
+    bool dugAbove = du <= 8 && texelFetch(uMask, clampLevel(p + ivec2(0, -du)), 0).g > 0.75;
     if (du <= 8 && !dugAbove) { vec4 c = atl(m, u, 64 + du - 1); if (c.a > 0.5) { base = c; topCap = true; } }
     if (!topCap && dd <= 8) { vec4 c = atl(m, u, 72 + dd - 1); if (c.a > 0.5) { base = c; botCap = true; } }
     vec3 outl = atl(m, 0, 112).rgb, hi = atl(m, 1, 112).rgb, sh = atl(m, 2, 112).rgb;
@@ -58,7 +60,7 @@ void main() {
   }
   vec4 col = vec4(0.0);
   float bw = 0.0;
-  if (p.x >= 0 && p.y >= 0 && p.x < int(uLevel.x) && p.y < int(uLevel.y)) bw = texelFetch(uMask, p, 0).g;
+  bw = texelFetch(uMask, clampLevel(p), 0).g;
   if (bw > 0.25) col = vec4(texelFetch(uBack, ivec2(u, v), 0).rgb * 0.55, 1.0);
   bool dug = bw > 0.75;
   for (int d = 1; d <= 16 && !dug; d++) {

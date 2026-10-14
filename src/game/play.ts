@@ -92,6 +92,8 @@ export class PlayScene {
     this.hooks = hooks;
     this.sim = Sim.create(cfg.level);
     p.fitWidth = cfg.level.boss ? Math.min(cfg.level.width, 640) : 0;
+    p.levelW = cfg.level.width;
+    p.levelH = cfg.level.height;
     this.view = new GameView(p, art, this.sim);
     this.timeline = new Timeline(cfg.rewindSec);
     this.timeline.record(this.sim);
@@ -434,7 +436,11 @@ export class PlayScene {
     const shake = this.view.shake;
     const sx = shake ? Math.round((Math.random() - 0.5) * shake) : 0;
     const sy = shake ? Math.round((Math.random() - 0.5) * shake) : 0;
-    this.p.setCamera(this.camX + sx, this.camY + sy);
+    // screen shake must not reveal anything past the level edges either
+    const L = this.sim.L;
+    const cx = Math.max(0, Math.min(Math.max(0, L.w - this.p.viewW), this.camX + sx));
+    const cy = Math.max(0, Math.min(Math.max(0, L.h - this.p.viewH), this.camY + sy));
+    this.p.setCamera(cx, cy);
     this.view.draw({
       sim: this.sim, time: this.time, dt: 1, hover: this.hover, armed: this.armed,
       canAssign: this.hover !== null && this.armed !== null && this.sim.canAssign(this.sim.d.wyrds[this.hover], this.armed),

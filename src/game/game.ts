@@ -64,6 +64,25 @@ export class Game {
     if (this.scene) this.scene.resize(w, h, this.dpr);
     else this.p.resize(w, h, this.dpr);
     document.body.classList.toggle('portrait', h > w * 1.1);
+    // scale the HTML UI with the screen in quarter steps (1x up to 1280x720, then larger)
+    const ui = Math.max(1, Math.min(3, Math.floor(Math.min(h / 720, w / 1280) * 4) / 4));
+    this.ui.style.setProperty('--ui', String(ui));
+    this.fitTitleLogo();
+  }
+
+  /** Largest whole-pixel logo scale (1-3) that leaves room for the menu and footer. */
+  private fitTitleLogo(): void {
+    const box = this.screenEl.querySelector<HTMLElement>('.title-screen');
+    const logo = box?.querySelector<HTMLCanvasElement>('canvas.logo');
+    const menu = box?.querySelector<HTMLElement>('.menu');
+    const foot = box?.querySelector<HTMLElement>('.foot');
+    if (!box || !logo || !menu || !foot) return;
+    const gap = parseFloat(getComputedStyle(box).rowGap) || 0;
+    const availH = box.clientHeight - menu.offsetHeight - foot.offsetHeight - gap * 3 - 16;
+    const availW = box.clientWidth - 32;
+    const s = Math.max(1, Math.min(3, Math.floor(Math.min(availH / logo.height, availW / logo.width))));
+    logo.style.width = `${logo.width * s}px`;
+    logo.style.height = `${logo.height * s}px`;
   }
 
   private frame(t: number): void {
@@ -130,6 +149,7 @@ export class Game {
       el('div', { class: 'foot', text: 'Mouse, touch or keyboard · 1–9 callings · Space pause · R rewind · V foresight' }),
     );
     this.screenEl.append(box);
+    this.fitTitleLogo();
   }
 
   private story(): void {

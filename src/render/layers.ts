@@ -159,7 +159,7 @@ in vec2 vWorld;
 out vec4 outColor;
 void main() {
   ivec2 p = ivec2(floor(vWorld));
-  if (p.x >= 0 && p.y >= 0 && p.x < int(uLevel.x) && p.y < int(uLevel.y) && texelFetch(uMask, p, 0).r > 0.001) discard;
+  if (texelFetch(uMask, clamp(p, ivec2(0), ivec2(uLevel) - 1), 0).r > 0.001) discard;
   float wave = floor(sin(float(p.x) * 0.21 + uTime * (uLava > 0.5 ? 1.3 : 2.4)) * 1.2 + sin(float(p.x) * 0.07 - uTime * 0.9));
   float depth = float(p.y) - (uSurface + wave);
   if (depth < 0.0) discard;

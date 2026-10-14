@@ -3,6 +3,7 @@
 //   → comp RT, then emissive overlay (glows, particles, foresight, telegraphs) on top
 //   → nearest-neighbour integer upscale to the canvas with post effects.
 import * as THREE from 'three';
+import { fitView } from './scale';
 
 const QUAD_VERT = /* glsl */ `
 in vec2 position2;
@@ -103,8 +104,14 @@ export class Pipeline {
   zoomOffset = 0;
   /** preferred minimum view width in world px (boss arenas want to show the whole fight) */
   fitWidth = 0;
+  /** current level size: the view is never allowed to extend past it */
+  levelW = 0;
+  levelH = 0;
   private devW = 1;
   private devH = 1;
+  /** device-pixel offset of the upscaled image (bottom-left origin, <= 0 means cropped) */
+  private ox = 0;
+  private oy = 0;
   private sceneRT: THREE.WebGLRenderTarget;
   private lightRT: THREE.WebGLRenderTarget;
   private compRT: THREE.WebGLRenderTarget;
@@ -140,21 +147,18 @@ export class Pipeline {
     this.postScene.add(quadMesh(this.postMat));
   }
 
-  /** Pick an integer pixel scale so the internal height is ~240-300 px, then size targets. */
+  /** Pick an integer pixel scale (see render/scale.ts), then size the render targets. */
   resize(cssW: number, cssH: number, dpr: number): void {
     const devW = Math.max(1, Math.round(cssW * dpr));
     const devH = Math.max(1, Math.round(cssH * dpr));
     this.devW = devW;
     this.devH = devH;
-    let base = Math.max(1, Math.floor(Math.min(devH / 240, devW / 360)));
-    if (this.fitWidth > 0) {
-      // zoom out (never below 2x pixels) until the requested width fits
-      while (base > 2 && Math.floor(devW / base) < this.fitWidth) base--;
-    }
-    const scale = Math.max(1, base + this.zoomOffset);
-    this.scale = scale;
-    this.viewW = Math.max(64, Math.floor(devW / scale));
-    this.viewH = Math.max(64, Math.floor(devH / scale));
+    const fit = fitView(devW, devH, { levelW: this.levelW, levelH: this.levelH, fitWidth: this.fitWidth, zoomOffset: this.zoomOffset });
+    this.scale = fit.scale;
+    this.viewW = fit.viewW;
+    this.viewH = fit.viewH;
+    this.ox = fit.ox;
+    this.oy = fit.oy;
     this.renderer.setSize(devW, devH, false);
     this.canvas.style.width = cssW + 'px';
     this.canvas.style.height = cssH + 'px';
@@ -166,11 +170,11 @@ export class Pipeline {
 
   /** Map a CSS-pixel position on the canvas to world pixel coordinates. */
   screenToWorld(cssX: number, cssY: number, dpr: number): { x: number; y: number } {
-    const ox = Math.floor((this.devW - this.viewW * this.scale) / 2);
-    const oy = Math.floor((this.devH - this.viewH * this.scale) / 2);
+    // GL viewports are bottom-left based; convert the image's top edge to a top-left offset
+    const top = this.devH - (this.oy + this.viewH * this.scale);
     return {
-      x: this.view.x + (cssX * dpr - ox) / this.scale,
-      y: this.view.y + (cssY * dpr - oy) / this.scale,
+      x: this.view.x + (cssX * dpr - this.ox) / this.scale,
+      y: this.view.y + (cssY * dpr - top) / this.scale,
     };
   }
 
@@ -201,9 +205,7 @@ export class Pipeline {
     r.setClearColor(0x05040a, 1);
     r.setViewport(0, 0, this.devW, this.devH);
     r.clear(true, false, false);
-    const w = this.viewW * this.scale, h = this.viewH * this.scale;
-    const ox = Math.floor((this.devW - w) / 2), oy = Math.floor((this.devH - h) / 2);
-    r.setViewport(ox, oy, w, h);
+    r.setViewport(this.ox, this.oy, this.viewW * this.scale, this.viewH * this.scale);
     const u = this.postMat.uniforms;
     u.uTime.value = time;
     u.uRewind.value = this.post.rewind;
