@@ -422,8 +422,10 @@ export class Game {
     const fs = el('button', { class: 'btn', text: 'Fullscreen' });
     fs.addEventListener('click', () => { void document.documentElement.requestFullscreen?.().catch(() => undefined); });
     const reset = el('button', { class: 'btn danger', text: 'Erase progress' });
+    let armed = false;
     reset.addEventListener('click', () => {
-      if (!confirm('Erase all stars, threads and dyes?')) return;
+      // two-step confirmation in the page itself (browser dialogs are not always available)
+      if (!armed) { armed = true; reset.textContent = 'Tap again to erase'; audio.sfx('ui_deny'); return; }
       try { localStorage.removeItem('norns.save.v1'); } catch { /* ignore */ }
       location.reload();
     });
