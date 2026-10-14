@@ -175,3 +175,28 @@ They should feel huge and mythic relative to 12-px Wyrdlings; hurt frames flash 
   — 480×300 world-tree scene for the title/map screens; three realm "fruits/clearings" on its
   branches (Midgard low, Niflheim mid, Muspelheim high) whose centre coordinates are returned so
   the map can place level nodes around them.
+
+## Renderer terrain shading (emulate this in previews)
+
+For each world pixel `p=(x,y)` with material `m = mat(p)` (atlas column `m`, `u = x mod 64`):
+
+**Solid (`m ≠ 0`)**
+1. `du` = distance to the first air pixel straight up (1..8, else none); `dd` = same straight down.
+   If `du ≤ 8` and top-cap pixel `(m*64+u, 64+du-1)` has alpha > 0 → base = that color.
+   Else if `dd ≤ 8` and bottom-cap pixel `(m*64+u, 72+dd-1)` has alpha > 0 → base = that color.
+   Else base = body `(m*64+u, y mod 64)`.
+2. Edge (4-neighbourhood air): air above and no top cap → base = highlight; air left → mix(base,
+   highlight, 0.5); air below or right (and no bottom cap at that pixel) → base = outline.
+   Pixels exactly 2 px from air on the top/left get mix(base, highlight, 0.2); on the
+   bottom/right mix(base, shadow, 0.3).
+3. Depth: let `k` = min distance to air in the 4 axis directions (cap 8); multiply by
+   `1 - 0.02*k` (deep interiors up to 16 % darker).
+
+**Air (`m = 0`)**
+1. If the static back-wall flag is set → backWall tile color × 0.55, else transparent.
+2. Look down `d = 1..16`: at the first solid pixel (material `mb`), sample surface decoration
+   `(mb*64+u, 96-d)`; draw it if alpha > 0.
+3. Look up `d = 1..16`: at the first solid pixel (material `mt`), sample hanging decoration
+   `(mt*64+u, 95+d)`; draw it if alpha > 0.
+
+Lighting (multiplicative ambient + additive coloured lights with banded falloff) is applied after.
