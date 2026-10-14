@@ -42,7 +42,7 @@ export type EntityDef =
       type: 'gate'; id: string; x: number; y: number; w: number; h: number; links: string[];
       mode?: 'any' | 'all'; invert?: boolean; orient?: 'v' | 'h';
     }
-  | { type: 'vent'; x: number; y: number; w: number; h: number; force?: number }
+  | { type: 'vent'; x: number; y: number; w: number; h: number; force?: number; /** only blows while the boss lives */ boss?: boolean }
   | { type: 'water' | 'lava'; x: number; y: number; w: number; h: number }
   | { type: 'spikes'; x: number; y: number; w: number }
   | { type: 'crusher'; x: number; y: number; drop: number; period: number; phase?: number }

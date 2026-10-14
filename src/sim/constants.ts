@@ -37,7 +37,7 @@ export const SKILL_INFO: Record<SkillId, { name: string; key: string; desc: stri
   warden: { name: 'Warden', key: '3', desc: 'Stands firm and turns others back.' },
   basher: { name: 'Basher', key: '4', desc: 'Tunnels straight ahead.' },
   miner: { name: 'Miner', key: '5', desc: 'Tunnels diagonally downward.' },
-  climber: { name: 'Climber', key: '6', desc: 'Permanent: scales vertical walls.' },
+  climber: { name: 'Climber', key: '6', desc: 'Permanent: scales vertical walls (not smooth rune-iron).' },
   glider: { name: 'Glider', key: '7', desc: 'Permanent: glides safely from any height, rides updrafts.' },
   leaper: { name: 'Leaper', key: '8', desc: 'One big jump forward over a gap.' },
   blast: { name: 'Rune Blast', key: '9', desc: 'Plants a rune that bursts 3 s later, carving rock and flinging things. The planter walks on.' },

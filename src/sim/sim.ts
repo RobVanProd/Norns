@@ -188,8 +188,13 @@ export class Sim {
     return null;
   }
 
+  ventOn(v: { boss?: boolean }): boolean {
+    return !v.boss || (!!this.d.boss && this.d.boss.hp > 0);
+  }
+
   ventForce(x: number, y: number): number {
     for (const v of this.L.vents) {
+      if (!this.ventOn(v)) continue;
       if (x >= v.x && x < v.x + v.w && y <= v.y && y >= v.y - v.h) return v.force ?? 0.22;
     }
     return 0;
@@ -516,7 +521,9 @@ export class Sim {
         if (this.weaverAhead(w)) { this.setSt(w, 'wait'); break; }
         const r = this.walkMove(w);
         if (r === 'wall') {
-          if (w.climber) this.setSt(w, 'climb');
+          // rune-iron and gates are too smooth to climb
+          const m = this.terrain.get(w.x + w.dir, w.y - 1);
+          if (w.climber && !isIndestructible(m)) this.setSt(w, 'climb');
           else w.dir = -w.dir as 1 | -1;
         } else if (r === 'fall') this.startFall(w);
         break;
@@ -901,7 +908,8 @@ export class Sim {
       if (c.fuse % 30 === 0 && c.fuse > 0) this.emit('rune_tick', c.x, c.y, undefined, undefined, c.fuse / 30);
       if (c.fuse <= 0) {
         d.charges.splice(i, 1);
-        this.detonate(c.x, c.y - 3, BLAST_RADIUS);
+        // centred at body height: blasts open passages without digging deep pits
+        this.detonate(c.x, c.y - 8, BLAST_RADIUS);
       }
     }
   }

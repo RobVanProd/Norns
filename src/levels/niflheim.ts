@@ -162,4 +162,46 @@ export const N4: LevelDef = {
   ],
 };
 
-export const NIFLHEIM: LevelDef[] = [N1, N2, N3, N4];
+export const N5: LevelDef = {
+  id: 'n5', name: 'Hrímgrímnir', realm: 'niflheim', music: 'boss',
+  intro: 'The Frost Jötunn guards the mist. His breath freezes, his fists shake the ice, his icicles rain down.',
+  hints: [
+    'Frozen Wyrdlings thaw in time — until then others bump into them like ice.',
+    'Climbers cross the ice pillar every lap — and its stone with it.',
+    'When the fist rises, scatter: a slam crushes everyone huddled beneath it.',
+  ],
+  width: 600, height: 320, seed: 65,
+  wyrdlings: 20, quota: 10, target: 15, rate: 30,
+  skills: { climber: 4, leaper: 3, warden: 2, glider: 2, miner: 1 },
+  ambient: [0.62, 0.7, 0.9],
+  terrain: [
+    { op: 'rect', mat: 'Rock', x: 0, y: 260, w: 600, h: 60, rough: 2 },
+    { op: 'rect', mat: 'Ice', x: 0, y: 258, w: 520, h: 6, rough: 1 },
+    { op: 'rect', mat: 'Ice', x: 200, y: 242, w: 50, h: 18, rough: 1 },
+    { op: 'rect', mat: 'Ice', x: 340, y: 214, w: 32, h: 46, rough: 0.5 },
+    { op: 'rect', mat: 'Iron', x: 520, y: 0, w: 16, h: 262 },
+    { op: 'ceiling', mat: 'Ice', pts: [[0, 50], [160, 40], [320, 58], [460, 44], [600, 60]], rough: 6, grain: 16 },
+  ],
+  entities: [
+    { type: 'entrance', x: 80, y: 190 },
+    { type: 'exit', x: 26, y: 257 },
+    { type: 'seidr', x: 120, y: 257 },
+    { type: 'seidr', x: 225, y: 241 },
+    { type: 'seidr', x: 356, y: 213 },
+    { type: 'decor', sprite: 'crystal', x: 60, y: 257 },
+    { type: 'decor', sprite: 'brazier', x: 300, y: 257 },
+    { type: 'decor', sprite: 'crystal', x: 440, y: 257 },
+    { type: 'decor', sprite: 'brazier', x: 500, y: 257 },
+  ],
+  boss: { kind: 'jotunn', x: 566, y: 300, hp: 6, delay: 160, arena: { x0: 12, x1: 512, floorY: 257 } },
+  solution: [
+    { nth: 0, skill: 'climber' },
+    { nth: 0, skill: 'glider' },
+    { nth: 1, skill: 'climber' },
+    { nth: 1, skill: 'glider' },
+    // a slam shockwave tosses one Wyrdling into the gully behind the ledge: leap it back out
+    { nth: 10, t: 1000, x: 268, dir: -1, skill: 'leaper' },
+  ],
+};
+
+export const NIFLHEIM: LevelDef[] = [N1, N2, N3, N4, N5];

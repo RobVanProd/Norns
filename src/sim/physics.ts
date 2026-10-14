@@ -122,8 +122,10 @@ export function stepBodies(sim: Sim): void {
       if (l.type === 'water') {
         b.vx *= 0.9;
         b.vy = b.vy * 0.85 - BODY_GRAVITY * 0.5;
-      } else {
-        // lava: harden into a stepping stone sitting at the surface
+      } else if (b.y >= l.y + b.r * 0.4) {
+        // lava: harden into a stepping stone sitting at the surface, centred in the pool if it fits
+        const cx = l.w >= b.r * 2 ? Math.max(l.x + b.r, Math.min(l.x + l.w - b.r, b.x)) : l.x + l.w / 2;
+        b.x = cx;
         const cy = l.y + b.r - 4;
         const r2 = b.r * b.r;
         for (let y = Math.floor(cy - b.r); y <= Math.ceil(cy + b.r); y++) {

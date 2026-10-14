@@ -329,7 +329,7 @@ function stepProjectiles(sim: Sim): void {
 
 function impact(sim: Sim, p: Projectile, x: number, y: number): void {
   p.gone = true;
-  const killR = p.kind === 'icicle' ? 5 : p.kind === 'meteor' ? 8 : 5;
+  const killR = p.kind === 'icicle' ? 3 : p.kind === 'meteor' ? 8 : 5;
   for (const w of sim.d.wyrds) {
     if (!isAlive(w)) continue;
     const dx = w.x - x, dy = w.y - 5 - y;
@@ -342,10 +342,16 @@ function impact(sim: Sim, p: Projectile, x: number, y: number): void {
       sim.emit('venom_hit', x, y);
       break;
     case 'icicle': {
-      // shatters into a small ice spire that blocks the path
+      // shatters into a small ice spike (kept within step height so nobody is walled in for good)
       const sy = surfaceY(sim, x, y - 4);
-      for (let yy = sy - 9; yy < sy; yy++) {
-        const half = Math.max(1, Math.floor((yy - (sy - 10)) / 3) + 1);
+      // only on clear, level ground: spikes never stack into walls
+      let clear = true;
+      for (let dx = -5; dx <= 5 && clear; dx++) {
+        if (sim.solid(x + dx, sy - 1) || !sim.solid(x + dx, sy)) clear = false;
+      }
+      if (!clear) { sim.emit('ice_shatter', x, sy); break; }
+      for (let yy = sy - 6; yy < sy; yy++) {
+        const half = Math.max(1, Math.floor((yy - (sy - 7)) / 2) + 1);
         for (let xx = x - half; xx <= x + half; xx++) if (sim.terrain.get(xx, yy) === 0 && !wyrdAt(sim, xx, yy)) sim.terrain.set(xx, yy, Mat.Ice);
       }
       sim.touched(x - 4, sy - 10, x + 4, sy);
@@ -430,7 +436,7 @@ function stepHazards(sim: Sim): void {
       case 'slam':
         if (h.t === h.warn) {
           for (const w of sim.d.wyrds) {
-            if (isAlive(w) && Math.abs(w.x - h.x0) <= 10 && w.y >= h.y0 - 16 && w.y <= h.y0 + 2) sim.kill(w, 'unravel', 'slam');
+            if (isAlive(w) && Math.abs(w.x - h.x0) <= 6 && w.y >= h.y0 - 16 && w.y <= h.y0 + 2) sim.kill(w, 'unravel', 'slam');
           }
           sim.emit('slam', h.x0, h.y0);
         }
