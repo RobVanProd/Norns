@@ -264,6 +264,7 @@ export class Game {
     });
     const won = (out.mask & 1) === 1;
     audio.stinger(won ? 'victory' : 'defeat');
+    if (won && level === ALL_LEVELS[ALL_LEVELS.length - 1]) setTimeout(() => audio.playMusic('finale'), 2500);
     const stars = el('div', { class: 'big-stars' });
     const hasSpindle = level.entities.some((e) => e.type === 'spindle');
     for (let k = 0; k < (hasSpindle ? 3 : 2); k++) {
@@ -289,7 +290,8 @@ export class Game {
     if (r.rewinds) lines.push(el('div', { class: 'stat' }, el('span', { text: 'Rewinds' }), el('b', { text: `${r.rewinds} (free!)` })));
     if (out.threads) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Threads earned' }), el('b', { text: `+${out.threads}` })));
     this.openModal(el('div', { class: `panel modal results ${won ? 'won' : 'lost'}` },
-      el('h2', { text: won ? (level.boss ? 'The Guardian Falls!' : 'Threads Rewoven!') : 'Fate Unravelled' }),
+      el('h2', { text: won ? (level === ALL_LEVELS[ALL_LEVELS.length - 1] ? 'The Threads Are Whole!' : level.boss ? 'The Guardian Falls!' : 'Threads Rewoven!') : 'Fate Unravelled' }),
+      won && level === ALL_LEVELS[ALL_LEVELS.length - 1] ? el('p', { class: 'flavor', text: 'Surtr\u2019s fire gutters out. The Wyrdlings are home, and the Norns weave on.' }) : null,
       stars,
       el('div', { class: 'stats' }, ...lines),
       won ? null : el('p', { class: 'flavor', text: 'No harm done — hold Rewind next time, or watch Skuld’s Vision for one path that works.' }),

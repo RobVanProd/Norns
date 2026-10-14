@@ -10,7 +10,7 @@ for (let t = 0; t < +maxS && !sim.d.finished; t++) {
   for (const s of pl.apply(sim)) { const w = sim.d.wyrds[s.nth]; console.log(`t=${sim.d.tick} ASSIGN #${s.nth} ${s.skill} @(${w.x},${w.y}) dir=${w.dir}`); }
   sim.step();
   for (const e of sim.events) {
-    if (['seidr_on', 'boss_hit', 'death', 'boss_telegraph', 'boss_defeat', 'saved'].includes(e.type)) {
+    if (['seidr_on', 'boss_hit', 'death', 'boss_telegraph', 'boss_defeat', 'saved', 'crusher_break', 'lever', 'blast', 'stone_harden'].includes(e.type)) {
       console.log(`t=${sim.d.tick} ${e.type} ${e.s ?? ''} id=${e.id ?? ''} (${Math.round(e.x)},${Math.round(e.y)}) v=${e.v ?? ''}`);
     }
   }
