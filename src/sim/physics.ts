@@ -89,7 +89,7 @@ export function stepBodies(sim: Sim): void {
       touching = true;
       const [nx, ny] = c;
       // push out
-      for (let k = 0; k < b.r * 4; k++) {
+      for (let k = 0; k < b.r * 2; k++) {
         b.x += nx * 0.5;
         b.y += ny * 0.5;
         if (!contact(sim, b)) break;
@@ -118,11 +118,12 @@ export function stepBodies(sim: Sim): void {
 
     // liquids
     for (const l of L.liquids) {
-      if (b.x < l.x || b.x >= l.x + l.w || b.y + b.r * 0.3 < l.y || b.y - b.r > l.y + l.h) continue;
+      if (b.x < l.x || b.x >= l.x + l.w || b.y + b.r < l.y || b.y - b.r > l.y + l.h) continue;
       if (l.type === 'water') {
+        if (b.y + b.r * 0.3 < l.y) continue;
         b.vx *= 0.9;
         b.vy = b.vy * 0.85 - BODY_GRAVITY * 0.5;
-      } else if (b.y >= l.y + b.r * 0.4) {
+      } else if (b.y + b.r >= l.y + 4) {
         // lava: harden into a stepping stone sitting at the surface, centred in the pool if it fits
         const cx = l.w >= b.r * 2 ? Math.max(l.x + b.r, Math.min(l.x + l.w - b.r, b.x)) : l.x + l.w / 2;
         b.x = cx;
@@ -134,6 +135,9 @@ export function stepBodies(sim: Sim): void {
             if (dx * dx + dy * dy <= r2 && sim.terrain.get(x, y) === 0) sim.terrain.set(x, y, Mat.Rock);
           }
         }
+        // the lava around it cools into a flat crust so the stone meets the banks
+        const x0 = Math.max(l.x, Math.floor(b.x - b.r - 4)), x1 = Math.min(l.x + l.w - 1, Math.ceil(b.x + b.r + 4));
+        for (let y = l.y - 1; y <= l.y + 6; y++) for (let x = x0; x <= x1; x++) if (sim.terrain.get(x, y) === 0) sim.terrain.set(x, y, Mat.Rock);
         b.gone = true;
         sim.touched(Math.floor(b.x - b.r), Math.floor(cy - b.r), Math.ceil(b.x + b.r), Math.ceil(cy + b.r));
         sim.emit('stone_harden', b.x, l.y, b.id, undefined, b.r);
@@ -146,10 +150,18 @@ export function stepBodies(sim: Sim): void {
     const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
     if (speed > BODY_CRUSH_SPEED) {
       for (const w of sim.d.wyrds) {
-        if (!isAlive(w)) continue;
+        if (!isAlive(w) || w.st === 'tumble') continue;
         const dx = w.x - b.x, dy = w.y - 5 - b.y;
         const rr = b.r + 4;
-        if (dx * dx + dy * dy < rr * rr) sim.kill(w, 'unravel', 'boulder');
+        if (dx * dx + dy * dy >= rr * rr) continue;
+        // a falling or racing boulder crushes; a rolling one bowls Wyrdlings aside
+        if (b.vy > 1.4 || speed > 2.6) sim.kill(w, 'unravel', 'boulder');
+        else {
+          const side = dx >= 0 ? 1 : -1;
+          w.dir = side as 1 | -1;
+          sim.fling(w, side * (1.2 + Math.abs(b.vx) * 0.8), -2.4);
+          sim.emit('bowled', w.x, w.y, w.id);
+        }
       }
     }
     // sleep

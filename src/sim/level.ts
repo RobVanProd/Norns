@@ -41,12 +41,16 @@ export type EntityDef =
   | {
       type: 'gate'; id: string; x: number; y: number; w: number; h: number; links: string[];
       mode?: 'any' | 'all'; invert?: boolean; orient?: 'v' | 'h';
+      /** ticks per slice while opening (default 4: only a sustained press opens a gate) */ speed?: number;
     }
   | { type: 'vent'; x: number; y: number; w: number; h: number; force?: number; /** only blows while the boss lives */ boss?: boolean }
   | { type: 'water' | 'lava'; x: number; y: number; w: number; h: number }
   | { type: 'spikes'; x: number; y: number; w: number }
   | { type: 'crusher'; x: number; y: number; drop: number; period: number; phase?: number }
-  | { type: 'firejet'; x: number; y: number; h: number; on: number; off: number; phase?: number }
+  | {
+      type: 'firejet'; x: number; y: number; h: number; on: number; off: number; phase?: number;
+      /** levers/plates that cut the gas (jet is dead while any is active) */ links?: string[];
+    }
   | { type: 'brittle'; x: number; y: number; w: number; h: number; hp?: number }
   | { type: 'spindle'; x: number; y: number }
   | { type: 'seidr'; x: number; y: number }

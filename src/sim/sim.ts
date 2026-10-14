@@ -23,7 +23,7 @@ export interface StaticLevel {
   plates: { id: string; x: number; y: number; w: number }[];
   levers: { id: string; x: number; y: number }[];
   gates: {
-    id: string; x: number; y: number; w: number; h: number; orient: 'v' | 'h'; mode: 'any' | 'all'; invert: boolean;
+    id: string; x: number; y: number; w: number; h: number; orient: 'v' | 'h'; mode: 'any' | 'all'; invert: boolean; speed: number;
     links: { kind: 'plate' | 'lever'; idx: number }[];
   }[];
   vents: E<'vent'>[];
@@ -76,7 +76,7 @@ export function buildStatic(def: LevelDef): StaticLevel {
       if (li >= 0) return { kind: 'lever' as const, idx: li };
       throw new Error(`gate ${e.id}: unknown link ${id}`);
     });
-    L.gates.push({ id: e.id, x: e.x, y: e.y, w: e.w, h: e.h, orient: e.orient ?? 'v', mode: e.mode ?? 'any', invert: !!e.invert, links });
+    L.gates.push({ id: e.id, x: e.x, y: e.y, w: e.w, h: e.h, orient: e.orient ?? 'v', mode: e.mode ?? 'any', invert: !!e.invert, speed: e.speed ?? 4, links });
   }
   return L;
 }
@@ -105,7 +105,7 @@ export class Sim {
     const d: SimData = {
       tick: 0, rng: def.seed >>> 0, wyrds: [], spawned: 0, saved: 0, dead: 0, skills, used: 0,
       bodies: [], charges: [], gates: L.gates.map(() => ({ open: 0 })), plates: L.plates.map(() => false),
-      levers: L.levers.map(() => false), brittle: L.brittles.map((b) => b.hp), spindle: false,
+      levers: L.levers.map(() => false), brittle: L.brittles.map((b) => b.hp), broken: L.crushers.map(() => false), spindle: false,
       sandActive: [], boss: null, projectiles: [], hazards: [], idle: 0, finished: false,
     };
     const sim = new Sim(L, terrain, d);
@@ -202,6 +202,7 @@ export class Sim {
 
   crusherBottom(i: number, tick = this.d.tick): { hb: number; deadly: boolean; warn: boolean } {
     const c = this.L.crushers[i];
+    if (this.d.broken[i]) return { hb: c.y - 6, deadly: false, warn: false };
     const cyc = (tick + (c.phase ?? 0)) % c.period;
     const rest = c.period - 36;
     if (cyc < rest) return { hb: c.y, deadly: false, warn: cyc >= rest - 12 };
@@ -213,6 +214,7 @@ export class Sim {
 
   firejetState(i: number, tick = this.d.tick): 0 | 1 | 2 {
     const f = this.L.firejets[i];
+    if (f.links && f.links.some((id) => this.linkOn(id))) return 0;
     const cyc = (tick + (f.phase ?? 0)) % (f.on + f.off);
     if (cyc < f.on) return 2; // burning
     if (cyc >= f.on + f.off - 15) return 1; // warning flicker
@@ -265,6 +267,14 @@ export class Sim {
 
   // ------------------------------------------------------------------ gates
 
+  /** Is the plate or lever with this id active? */
+  linkOn(id: string): boolean {
+    const pi = this.L.plates.findIndex((p) => p.id === id);
+    if (pi >= 0) return this.d.plates[pi];
+    const li = this.L.levers.findIndex((l) => l.id === id);
+    return li >= 0 && this.d.levers[li];
+  }
+
   private gateTarget(i: number): boolean {
     const g = this.L.gates[i];
     const vals = g.links.map((l) => (l.kind === 'plate' ? this.d.plates[l.idx] : this.d.levers[l.idx]));
@@ -309,12 +319,16 @@ export class Sim {
       const len = g.orient === 'v' ? g.h : g.w;
       const st = this.d.gates[i];
       const want = this.gateTarget(i);
+      // gates grind open slowly (only a sustained press opens them) and slam shut quickly
       if (want && st.open < len) {
-        this.gateSlice(i, st.open, Mat.Air);
-        st.open++;
-        if (st.open === 1 || st.open === len) this.emit('gate_move', g.x + g.w / 2, g.y + g.h / 2);
+        if (this.d.tick % g.speed === 0) {
+          this.gateSlice(i, st.open, Mat.Air);
+          st.open++;
+          if (st.open === 1 || st.open === len) this.emit('gate_move', g.x + g.w / 2, g.y + g.h / 2);
+        }
       } else if (!want && st.open > 0) {
-        if (!this.sliceBlocked(i, st.open - 1)) {
+        for (let k = 0; k < 2 && st.open > 0; k++) {
+          if (this.sliceBlocked(i, st.open - 1)) break;
           st.open--;
           this.gateSlice(i, st.open, Mat.Gate);
           if (st.open === len - 1 || st.open === 0) this.emit('gate_move', g.x + g.w / 2, g.y + g.h / 2);
@@ -484,9 +498,25 @@ export class Sim {
       let d = 1;
       while (d <= STEP_DOWN && !this.solid(w.x, w.y + 1 + d)) d++;
       if (d <= STEP_DOWN) w.y += d;
-      else return 'fall';
+      else {
+        // a Wyrdling is ~8 px wide: it steps across slots 1-2 px wide instead of dropping in
+        for (let g = 1; g <= 2; g++) {
+          const gx = w.x + w.dir * g;
+          if (this.solid(gx, w.y + 1) || this.solid(gx, w.y + 2) || this.solid(gx, w.y)) return 'ok';
+        }
+        return 'fall';
+      }
     }
     return 'ok';
+  }
+
+  /** Standing over a 1-2 px slot with ground just ahead or behind (too narrow to fall into). */
+  private overSlot(w: Wyrd): boolean {
+    if (this.solid(w.x, w.y + 2) || this.solid(w.x, w.y + 3)) return false; // just a step down, not a slot
+    for (const off of [1, 2]) {
+      if (this.solid(w.x + w.dir * off, w.y + 1) && (this.solid(w.x - w.dir, w.y + 1) || this.solid(w.x - w.dir * 2, w.y + 1))) return true;
+    }
+    return false;
   }
 
   /** Unstick a wyrdling whose feet got buried (sand, closing gate). Returns false if crushed. */
@@ -516,7 +546,7 @@ export class Sim {
     switch (w.st) {
       case 'walk': {
         if (!this.unbury(w)) return;
-        if (!this.solid(w.x, w.y + 1)) { this.startFall(w); break; }
+        if (!this.solid(w.x, w.y + 1) && !this.overSlot(w)) { this.startFall(w); break; }
         if (this.wardenBlocks(w, w.x + w.dir)) { w.dir = -w.dir as 1 | -1; break; }
         if (this.weaverAhead(w)) { this.setSt(w, 'wait'); break; }
         const r = this.walkMove(w);
@@ -917,7 +947,17 @@ export class Sim {
   detonate(cx: number, cy: number, r: number): void {
     this.carveCircle(cx, cy, r);
     this.emit('blast', cx, cy, undefined, undefined, r);
-    bodyImpulse(this, cx, cy, 52, 5);
+    bodyImpulse(this, cx, cy, 48, 3.2);
+    // runes wreck forge machinery caught in the blast
+    this.L.crushers.forEach((c, i) => {
+      if (this.d.broken[i]) return;
+      const hb = this.crusherBottom(i).hb;
+      const dx = c.x - cx, dy = hb - 8 - cy;
+      if (dx * dx + dy * dy <= (r + 20) * (r + 20)) {
+        this.d.broken[i] = true;
+        this.emit('crusher_break', c.x, hb - 8);
+      }
+    });
     const R = r + 10;
     for (const w of this.d.wyrds) {
       if (!isAlive(w)) continue;

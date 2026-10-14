@@ -134,6 +134,8 @@ export interface SimData {
   plates: boolean[];
   levers: boolean[];
   brittle: number[];
+  /** crushers wrecked by rune blasts */
+  broken: boolean[];
   spindle: boolean;
   sandActive: number[];
   boss: BossState | null;
