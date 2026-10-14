@@ -101,6 +101,8 @@ export class Pipeline {
   viewH = 270;
   scale = 1;
   zoomOffset = 0;
+  /** preferred minimum view width in world px (boss arenas want to show the whole fight) */
+  fitWidth = 0;
   private devW = 1;
   private devH = 1;
   private sceneRT: THREE.WebGLRenderTarget;
@@ -144,7 +146,11 @@ export class Pipeline {
     const devH = Math.max(1, Math.round(cssH * dpr));
     this.devW = devW;
     this.devH = devH;
-    const base = Math.max(1, Math.floor(Math.min(devH / 240, devW / 360)));
+    let base = Math.max(1, Math.floor(Math.min(devH / 240, devW / 360)));
+    if (this.fitWidth > 0) {
+      // zoom out (never below 2x pixels) until the requested width fits
+      while (base > 2 && Math.floor(devW / base) < this.fitWidth) base--;
+    }
     const scale = Math.max(1, base + this.zoomOffset);
     this.scale = scale;
     this.viewW = Math.max(64, Math.floor(devW / scale));

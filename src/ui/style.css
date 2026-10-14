@@ -200,7 +200,7 @@ body.portrait:not(.rotate-ok) #rotate {
 .bfill { height: 100%; background: linear-gradient(180deg, #ff7a6a, #c22a3a); transition: width 0.4s; }
 .fate { position: absolute; top: calc(64px + var(--safe-t)); right: calc(12px + var(--safe-r)); font-size: 15px; color: #ff8a7e; text-shadow: 2px 2px 0 #000; opacity: 0; transition: opacity 0.2s; }
 .fate.show { opacity: 1; }
-.hint { position: absolute; bottom: calc(108px + var(--safe-b)); left: 50%; transform: translateX(-50%) translateY(8px); max-width: min(620px, 92vw); text-align: center;
+.hint { position: absolute; top: calc(70px + var(--safe-t)); left: 50%; transform: translateX(-50%) translateY(-8px); max-width: min(620px, 92vw); text-align: center;
   padding: 10px 16px; font-size: 17px; background: rgba(19, 15, 30, 0.92); box-shadow: inset 0 0 0 2px var(--gold-lo); opacity: 0; transition: all 0.25s; }
 .hint.show { opacity: 1; transform: translateX(-50%); }
 .hud-bottom { position: absolute; bottom: calc(8px + var(--safe-b)); left: calc(8px + var(--safe-l)); right: calc(8px + var(--safe-r)); display: flex; align-items: flex-end; justify-content: center; gap: 10px; pointer-events: none; }
@@ -222,17 +222,20 @@ body.portrait:not(.rotate-ok) #rotate {
   background: #1c2a40; box-shadow: inset 0 0 0 2px #0a0710, inset 2px 2px 0 2px #3e6a9a, inset -2px -2px 0 2px #0e1624; }
 .rewind.on { background: #2c4a70; box-shadow: inset 0 0 0 2px #0a0710, inset 2px 2px 0 2px #9fd3ff, 0 0 14px rgba(120, 190, 255, 0.6); }
 .rewind .rsec { font: 12px var(--font-num); color: #9fd3ff; }
+.hud.boss .hint { top: calc(108px + var(--safe-t)); }
 .hud.paused .hud-name::after { content: ' · PAUSED'; color: var(--teal); }
 
 @media (max-height: 460px) {
-  .skill { width: 50px; height: 62px; padding-top: 3px; }
+  .skill { width: 50px; height: 60px; padding-top: 3px; }
+  .skill canvas.icon { width: 36px !important; height: 36px !important; }
+  .rewind canvas.icon { width: 36px !important; height: 36px !important; }
   .skill .sname { display: none; }
   .rewind { width: 64px; height: 62px; }
   .ibtn { width: 40px; height: 40px; }
   .counters { padding: 4px 8px; gap: 8px; }
   .ctr { font-size: 15px; }
   .hud-name { font-size: 15px; }
-  .hint { bottom: calc(80px + var(--safe-b)); font-size: 15px; }
+  .hint { top: calc(56px + var(--safe-t)); font-size: 14px; }
   .bossbar { top: calc(54px + var(--safe-t)); }
   .fate { top: calc(54px + var(--safe-t)); }
   .modal { padding: 14px 18px; }

@@ -58,6 +58,17 @@ export class Terrain {
     this.vers[ci]++;
   }
 
+  /** Writable array for chunk ci (copy-on-write); bumps its version. */
+  writable(ci: number): Uint8Array {
+    let c = this.chunks[ci];
+    if (!this.owned[ci]) {
+      c = this.chunks[ci] = c.slice();
+      this.owned[ci] = 1;
+    }
+    this.vers[ci]++;
+    return c;
+  }
+
   clone(): Terrain {
     const t = Object.create(Terrain.prototype) as Terrain;
     (t as { w: number }).w = this.w;

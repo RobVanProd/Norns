@@ -40,7 +40,9 @@ void main() {
     for (int k = 1; k <= 8; k++) { if (matAt(p + ivec2(k, 0)) == 0) { dr = k; break; } }
     vec4 base = atl(m, u, v);
     bool topCap = false, botCap = false;
-    if (du <= 8) { vec4 c = atl(m, u, 64 + du - 1); if (c.a > 0.5) { base = c; topCap = true; } }
+    // no fresh grass/frost caps on the floor of a tunnel that was just dug
+    bool dugAbove = du <= 8 && texelFetch(uMask, p + ivec2(0, -du), 0).g > 0.75;
+    if (du <= 8 && !dugAbove) { vec4 c = atl(m, u, 64 + du - 1); if (c.a > 0.5) { base = c; topCap = true; } }
     if (!topCap && dd <= 8) { vec4 c = atl(m, u, 72 + dd - 1); if (c.a > 0.5) { base = c; botCap = true; } }
     vec3 outl = atl(m, 0, 112).rgb, hi = atl(m, 1, 112).rgb, sh = atl(m, 2, 112).rgb;
     if (du == 1 && !topCap) base.rgb = hi;
@@ -55,10 +57,11 @@ void main() {
     return;
   }
   vec4 col = vec4(0.0);
-  if (p.x >= 0 && p.y >= 0 && p.x < int(uLevel.x) && p.y < int(uLevel.y) && texelFetch(uMask, p, 0).g > 0.5) {
-    col = vec4(texelFetch(uBack, ivec2(u, v), 0).rgb * 0.55, 1.0);
-  }
-  for (int d = 1; d <= 16; d++) {
+  float bw = 0.0;
+  if (p.x >= 0 && p.y >= 0 && p.x < int(uLevel.x) && p.y < int(uLevel.y)) bw = texelFetch(uMask, p, 0).g;
+  if (bw > 0.25) col = vec4(texelFetch(uBack, ivec2(u, v), 0).rgb * 0.55, 1.0);
+  bool dug = bw > 0.75;
+  for (int d = 1; d <= 16 && !dug; d++) {
     int mb = matAt(p + ivec2(0, d));
     if (mb != 0) { vec4 c = atl(mb, u, 96 - d); if (c.a > 0.5) col = vec4(c.rgb, 1.0); break; }
   }
@@ -84,7 +87,7 @@ export class TerrainLayer {
     this.w = terrain.w;
     this.h = terrain.h;
     this.data = new Uint8Array(this.w * this.h * 4);
-    for (let i = 0; i < this.w * this.h; i++) this.data[i * 4 + 1] = terrain.backWall[i] ? 255 : 0;
+    for (let i = 0; i < this.w * this.h; i++) this.data[i * 4 + 1] = terrain.backWall[i] === 1 ? 255 : terrain.backWall[i] === 2 ? 128 : 0;
     this.maskTex = new THREE.DataTexture(this.data, this.w, this.h, THREE.RGBAFormat, THREE.UnsignedByteType);
     this.maskTex.magFilter = THREE.NearestFilter;
     this.maskTex.minFilter = THREE.NearestFilter;

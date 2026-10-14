@@ -315,6 +315,8 @@ export class GameView {
       case 'hazard_burrow': this.shake = Math.max(this.shake, 6); this.matDebris(sim, e.x, e.y, 40, 3); break;
       case 'hazard_lash': case 'hazard_sweep': this.shake = Math.max(this.shake, 4); break;
       case 'clink': this.burst(this.sparks, e.x, e.y, 6, [1, 1, 0.8], 1.2, 12, 0.05); break;
+      case 'crusher_break': this.burst(this.sparks, e.x, e.y, 40, [1, 0.75, 0.35], 2.4, 30, 0.08, 1); this.matDebris(sim, e.x, e.y, 16, 2); this.shake = Math.max(this.shake, 6); this.popup('WRECKED!', e.x, e.y - 20, [1, 0.7, 0.3]); break;
+      case 'bowled': this.burst(this.debris, e.x, e.y, 6, [0.8, 0.7, 0.6], 1, 20, 0.1, 1, true); break;
       case 'quota_met': this.popup('QUOTA MET!', e.x, e.y - 44, [0.6, 1, 0.6]); break;
       case 'land': this.burst(this.debris, e.x, e.y, 4, this.debrisColors[sim.terrain.get(e.x, e.y + 1)]?.[0] ?? [0.6, 0.5, 0.4], 0.6, 20, 0.08, 1, true); break;
     }
@@ -416,11 +418,15 @@ export class GameView {
     // crushers
     L.crushers.forEach((c, i) => {
       const st = sim.crusherBottom(i);
+      const broken = sim.d.broken[i];
       let jx = 0;
       if (st.warn) jx = Math.sin(time * 60) > 0 ? 1 : -1;
       const top = this.crusherTops[i];
-      for (let y = st.hb - 16 - 8; y > top - 8; y -= 8) E.push(this.f('crusher.shaft'), c.x + jx, y);
-      E.push(this.f('crusher.head'), c.x + jx, st.hb);
+      for (let y = st.hb - 16 - 8; y > top - 8; y -= 8) E.push(this.f('crusher.shaft'), c.x + jx, y, broken ? { r: 0.6, g: 0.55, b: 0.55 } : undefined);
+      if (broken) {
+        E.push(this.f('crusher.head'), c.x + 2, st.hb + 1, { rot: 0.28, r: 0.55, g: 0.5, b: 0.5, smooth: true });
+        if (Math.random() < 0.04) this.sparks.spawn(c.x + (Math.random() - 0.5) * 16, st.hb - 4, (Math.random() - 0.5) * 0.6, -0.4, 18, 1, 0.7, 0.3, 1, 1, 0.05);
+      } else E.push(this.f('crusher.head'), c.x + jx, st.hb);
     });
     // fire jets
     L.firejets.forEach((f, i) => {
@@ -720,7 +726,10 @@ export class GameView {
       for (let i = 1; i < n; i++) {
         if ((i + Math.floor(phase)) % every !== 0) continue;
         const fade = 1 - i / n;
-        O.push(dot, pts[i * 2], pts[i * 2 + 1] - 5, { r, g, b, a: a * (0.35 + 0.65 * fade) });
+        const x = Math.round(pts[i * 2]), y = Math.round(pts[i * 2 + 1] - 5);
+        // a dark under-dot keeps the thread readable on bright terrain
+        O.push(dot, x, y + 1, { r: 0.05, g: 0.03, b: 0.08, a: a * 0.6 * (0.35 + 0.65 * fade), sx: 2, sy: 2 });
+        O.push(dot, x, y, { r, g, b, a: a * (0.45 + 0.55 * fade), sx: 2, sy: 2 });
       }
     };
     const endMarker = (id: number, f: Fate, bright: boolean) => {

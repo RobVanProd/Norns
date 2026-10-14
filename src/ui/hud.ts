@@ -186,6 +186,7 @@ export class Hud {
       this.fateEl.classList.add('show');
     } else this.fateEl.classList.remove('show');
     this.root.classList.toggle('paused', s.paused);
+    this.root.classList.toggle('boss', !!s.boss);
   }
 
   dispose(): void {

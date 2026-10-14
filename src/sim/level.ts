@@ -244,5 +244,7 @@ export function buildTerrain(def: LevelDef): Terrain {
       }
     }
   }
+  // back wall: 1 = behind solid rock (revealed when dug), 2 = a designed cave interior (open at start)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (back[y * w + x] && terrain.getRaw(x, y) === 0) back[y * w + x] = 2;
   return terrain;
 }

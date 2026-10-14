@@ -4,7 +4,7 @@ import { audio } from '../audio';
 import type { ArtBundle } from '../art/bundle';
 import type { Pipeline } from '../render/pipeline';
 import { SKILLS, SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
-import { foresee, type Fate } from '../sim/foresight';
+import { ForesightJob, type Fate } from '../sim/foresight';
 import type { LevelDef } from '../sim/level';
 import { Sim } from '../sim/sim';
 import { SolutionPlayer } from '../sim/solution';
@@ -66,6 +66,8 @@ export class PlayScene {
   private fate: Fate | null = null;
   private branch: Fate | null = null;
   private branchKey = '';
+  private fateJob: ForesightJob | null = null;
+  private branchJob: ForesightJob | null = null;
   private acc = 0;
   private rewinding = false;
   private rewindAcc = 0;
@@ -89,6 +91,7 @@ export class PlayScene {
     this.cfg = cfg;
     this.hooks = hooks;
     this.sim = Sim.create(cfg.level);
+    p.fitWidth = cfg.level.boss ? Math.min(cfg.level.width, 640) : 0;
     this.view = new GameView(p, art, this.sim);
     this.timeline = new Timeline(cfg.rewindSec);
     this.timeline.record(this.sim);
@@ -97,8 +100,10 @@ export class PlayScene {
       this.state = 'play';
     }
     const e = this.sim.L.entrance;
-    this.camX = e.x - p.viewW / 2;
-    this.camY = e.y + 40 - p.viewH / 2;
+    const boss = cfg.level.boss;
+    // boss arenas open framed on the guardian; everything else on the entrance
+    this.camX = (boss ? boss.x : e.x) - p.viewW / 2;
+    this.camY = (boss ? boss.arena.floorY - 60 : e.y + 40) - p.viewH / 2;
     this.clampCam();
     if (cfg.mode === 'play' && uiRoot) {
       this.hud = new Hud(uiRoot, art.icons, cfg.level.skills, {
@@ -214,7 +219,7 @@ export class PlayScene {
     audio.setRewinding(on);
     audio.sfx(on ? 'rewind_start' : 'rewind_end');
     if (on) this.rewinds++;
-    else { this.fate = null; this.branchKey = ''; }
+    else { this.fate = null; this.fateJob = null; this.branchJob = null; this.branchKey = ''; }
   }
 
   private pick(wx: number, wy: number, touch: boolean): number | null {
@@ -250,6 +255,7 @@ export class PlayScene {
       this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
       this.hud?.flashSkill(this.armed);
       this.fate = null;
+      this.fateJob = null;
       this.branchKey = '';
       if (this.sim.d.skills[this.armed] <= 0) this.armed = null;
     } else {
@@ -281,7 +287,10 @@ export class PlayScene {
     if (!alive.length) return;
     let sx = 0, sy = 0;
     for (const w of alive) { sx += w.x; sy += w.y; }
-    const tx = sx / alive.length - this.p.viewW / 2, ty = sy / alive.length - this.p.viewH / 2 - 10;
+    let cx = sx / alive.length, cy = sy / alive.length;
+    const b = this.sim.d.boss;
+    if (b && b.hp > 0) { cx = cx * 0.5 + b.x * 0.5; cy = cy * 0.8 + (b.y - 40) * 0.2; }
+    const tx = cx - this.p.viewW / 2, ty = cy - this.p.viewH / 2 - 10;
     const k = 1 - Math.pow(0.03, dt);
     this.camX += (tx - this.camX) * k;
     this.camY += (ty - this.camY) * k;
@@ -299,7 +308,8 @@ export class PlayScene {
       const ay = (held.has('ArrowDown') || held.has('KeyS') ? 1 : 0) - (held.has('ArrowUp') || held.has('KeyW') ? 1 : 0);
       if (ax || ay) { this.camX += ax * sp; this.camY += ay * sp; this.userPanned = true; this.clampCam(); }
     }
-    if (this.cfg.mode !== 'play' || (!this.userPanned && this.sim.d.tick < 30 * 12 && this.state === 'play')) this.autoCamera(dt);
+    const bossCam = !!this.sim.d.boss && this.sim.d.boss.hp > 0;
+    if (this.cfg.mode !== 'play' || (!this.userPanned && (bossCam || this.sim.d.tick < 30 * 12) && this.state === 'play')) this.autoCamera(dt);
     this.camX += this.camVX * dt; this.camY += this.camVY * dt;
 
     if (this.rewinding) {
@@ -390,20 +400,32 @@ export class PlayScene {
   private updateForesight(): void {
     const horizon = Math.round(this.cfg.horizonSec * TICK_RATE);
     const sim = this.sim;
-    if (!this.fate || sim.d.tick - this.fate.from >= 6 || sim.d.tick < this.fate.from) {
-      this.fate = foresee(sim, horizon);
+    // paused: plenty of frame time; running: a few ms per frame, never a hitch
+    const budget = this.paused || this.state === 'intro' ? 12 : 4;
+    const stale = !this.fate || sim.d.tick - this.fate.from >= 6 || sim.d.tick < this.fate.from;
+    if (stale && !this.fateJob) this.fateJob = new ForesightJob(sim, horizon);
+    if (this.fateJob && this.fateJob.advance(budget)) {
+      this.fate = this.fateJob.fate;
+      this.fateJob = null;
       this.branchKey = '';
     }
+    if (!this.fate && !this.fateJob) this.fateJob = new ForesightJob(sim, horizon);
     const target = this.hover;
     if (this.armed && target !== null) {
       const w = sim.d.wyrds[target];
-      const key = `${this.armed}:${target}:${this.fate.from}`;
+      const key = `${this.armed}:${target}:${this.fate?.from ?? -1}`;
       if (key !== this.branchKey) {
         this.branchKey = key;
-        this.branch = w && sim.canAssign(w, this.armed) ? foresee(sim, horizon, { id: target, skill: this.armed }) : null;
+        this.branchJob = w && sim.canAssign(w, this.armed) ? new ForesightJob(sim, horizon, { id: target, skill: this.armed }) : null;
+        if (!this.branchJob) this.branch = null;
+      }
+      if (this.branchJob && this.branchJob.advance(budget)) {
+        this.branch = this.branchJob.fate;
+        this.branchJob = null;
       }
     } else {
       this.branch = null;
+      this.branchJob = null;
       this.branchKey = '';
     }
   }

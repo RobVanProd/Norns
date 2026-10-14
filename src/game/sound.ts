@@ -13,7 +13,7 @@ const DIRECT: Record<string, SfxId> = {
   boss_hit: 'boss_hit', boss_defeat: 'boss_defeat', seidr_beam: 'seidr_beam', seidr_on: 'foresight', venom_spit: 'venom_spit',
   venom_hit: 'venom_hit', burrow: 'burrow', hazard_burrow: 'burrow', hazard_lash: 'tail_lash', icicle_warn: 'icicle_fall',
   ice_shatter: 'ice_shatter', freeze: 'freeze', slam: 'slam', hazard_sweep: 'fire_whoosh', magma_warn: 'magma',
-  hazard_magma: 'magma', meteor: 'meteor', inhale: 'boss_roar', clink: 'ui_deny',
+  hazard_magma: 'magma', meteor: 'meteor', inhale: 'boss_roar', clink: 'ui_deny', crusher_break: 'boulder_impact', bowled: 'land',
 };
 
 const QUIET: Partial<Record<string, number>> = { dig: 0.5, bash: 0.55, mine: 0.55, sand: 0.4, boulder_roll: 0.5, clink: 0.35, rune_tick: 0.6, spawn: 0.6 };

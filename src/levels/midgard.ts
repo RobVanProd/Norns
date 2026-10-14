@@ -185,7 +185,7 @@ export const M5: LevelDef = {
     { type: 'decor', sprite: 'banner', x: 230, y: 50 },
     { type: 'decor', sprite: 'runestone', x: 508, y: 215 },
   ],
-  boss: { kind: 'wyrm', x: 584, y: 132, hp: 6, delay: 150, arena: { x0: 12, x1: 512, floorY: 239 } },
+  boss: { kind: 'wyrm', x: 572, y: 132, hp: 6, delay: 150, arena: { x0: 12, x1: 512, floorY: 239 } },
   solution: [
     { nth: 0, x: 416, dir: 1, skill: 'weaver' },
   ],
