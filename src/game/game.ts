@@ -6,6 +6,7 @@ import { ALL_LEVELS, REALM_LIST } from '../levels';
 import type { Pipeline } from '../render/pipeline';
 import { SKILLS, SKILL_INFO } from '../sim/constants';
 import type { LevelDef } from '../sim/level';
+import { SolutionPlayer } from '../sim/solution';
 import { clear, el, pixelCanvas } from '../ui/dom';
 import { PlayScene, type PlayMode, type PlayResult } from './play';
 import {
@@ -56,7 +57,8 @@ export class Game {
       if (q.has('go')) { this.closeModal(); this.scene?.begin(); }
     } else this.showTitle();
     requestAnimationFrame((t) => this.frame(t));
-    if (import.meta.env.DEV) (window as unknown as { __norns: unknown }).__norns = { scene: () => this.scene };
+    // dev-only hook for scripts/frames.mjs, scripts/clicktest.mjs and agents (see AGENTS.md)
+    if (import.meta.env.DEV) (window as unknown as { __norns: unknown }).__norns = { scene: () => this.scene, SolutionPlayer };
   }
 
   private resize(): void {

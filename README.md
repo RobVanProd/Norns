@@ -1,105 +1,203 @@
-# NORNS: Threads of Fate
+<p align="center">
+  <img src="docs/images/logo.png" alt="NORNS: Threads of Fate" width="560">
+</p>
 
-A 32-bit-era-styled creature-guiding puzzle game in the Lemmings lineage, built with Three.js and
-TypeScript. It runs in any modern browser with a mouse, a keyboard or a touchscreen.
+<p align="center">
+  <b>A pixel-art creature-guiding puzzle game in the Lemmings lineage, where you can see fate coming and wind it back.</b><br>
+  Three.js + TypeScript · runs in any modern browser · mouse, keyboard or touch
+</p>
 
-You play the three Norns of Norse myth. You can't carry the **Wyrdlings** home, but you can grant
-them callings (skills), **see their fate ahead of time**, and **rewind time** when fate goes wrong.
+<p align="center">
+  <a href="https://github.com/RobVanProd/Norns/actions/workflows/ci.yml"><img src="https://github.com/RobVanProd/Norns/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
+
+<p align="center">
+  <img src="docs/images/bridge.gif" alt="A Weaver lays a rising golden bridge across a gorge while the line of Wyrdlings follows" width="854">
+</p>
+
+You play the three Norns of Norse myth. The **Wyrdlings**, small hooded spirits, wander blind
+toward their doom. You can't carry them, but you can grant them callings (skills), **see each
+one's fate before it happens**, and **rewind time** when fate goes wrong. Lead enough of them
+home through the Root Gate to clear a level.
+
+## Play it
+
+You need [Node.js](https://nodejs.org) 20.19+ or 22.12+ (CI uses 22).
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
-npm test           # simulation + every level's scripted solution
-npm run build      # static site in dist/
+npm run dev          # open http://localhost:5173
 ```
 
-## What's in it
+`npm run dev` also prints a network address. Open it on a phone on the same Wi-Fi to play
+with touch. Landscape is the intended layout.
 
-- **15 levels in 3 realms**: Midgard, Niflheim and Muspelheim. Each realm has 4 puzzle levels and
-  a boss: the Gnawing Wyrm, Hrímgrímnir the Frost Jötunn, and Surtr's Herald.
-- **9 callings**: Digger, Weaver (builds a bridge), Warden (blocker), Basher, Miner, Climber,
-  Glider, Leaper, and Rune Blast.
-- **The twist, the three Norn powers** (the design pillars are immediate feedback, legible agency
-  and low-stakes autonomy):
-  - **Skuld's Foresight**: dotted threads show every Wyrdling's next few seconds. A red skull means
-    death, a spark means saved. Arm a calling and hover (or press and hold on touch) a Wyrdling to
-    see the branched future and a "+saved / −lost" delta before you commit.
-  - **Verðandi's callings**: assign skills, pause, and fast-forward at 2× or 4×.
-  - **Urðr's Rewind**: hold to unspool up to 20 s of time. Upgrades raise this to 60 s. It is
-    never penalised.
-- **Physics**:
-  - Destructible pixel terrain and falling sand/snow.
-  - Rigid boulders that roll, bounce, bowl Wyrdlings over, press plates, and cool into stepping
-    stones in lava.
-  - Ballistic flinging from blasts and boss attacks.
-- **Environmental puzzles**: pressure plates and levers wired to gates and bridges, snow hoppers,
-  updrafts, crushers and gas flames that rune blasts can wreck, lava and water.
-- **Boss fights**: every attack is telegraphed (markers, bands, a shaking fist). Damage comes from
-  glowing **Seiðr stones**. All of it is deterministic simulation, so Foresight predicts who an
-  attack will hit.
-- **Progression**:
-  - Stars per level: quota, high target, and a Golden Spindle.
-  - Threads (currency) are spent at **the Loom** on longer foresight, a longer rewind, and hood
-    dyes.
-  - Skuld's Vision replays a verified solution if you're stuck.
-- **Presentation**:
-  - Everything is generated in code at startup: hue-shifted pixel art, parallax skies, terrain
-    shaded per pixel in a shader, 2D lighting with banded falloff, and particles.
-  - A sample-based synth plays an original soundtrack (title, map, three realm themes, boss with
-    3 intensity layers, finale, stingers) and 63 sound effects.
+Other ways to run it:
 
-## Controls
-
-| | Mouse / keyboard | Touch |
+| Goal | Command | Result |
 |---|---|---|
-| Choose a calling | click the bar or press `1`–`9` | tap the bar |
-| Grant it | click a Wyrdling | tap a Wyrdling (press and hold to preview its fate) |
-| Pan | drag, arrow keys or WASD, mouse wheel | drag |
-| Zoom | `+` / `-`, Ctrl + wheel | pinch |
-| Pause / speed | `Space` / `F` | buttons |
-| Rewind | hold `R` | hold ◀◀ |
-| Foresight on/off | `V` | eye button |
+| Static website | `npm run build` | `dist/`: host it anywhere, paths are relative |
+| One file you can send or open offline | `node scripts/artifact.mjs norns.html` | a single self-contained `norns.html` |
+| Jump straight into a level | open `http://localhost:5173/?level=m2&go` | level ids are `m1`–`m5`, `n1`–`n5`, `u1`–`u5` |
+| Watch a verified solution | open `http://localhost:5173/?level=m2&vision&go` | Skuld's Vision replays it |
 
-## How it's built
+Progress (stars, Threads, upgrades, settings) is saved in the browser's `localStorage`.
+
+## How to play
+
+Wyrdlings drop from the entrance and walk until something stops them. A cliff, a lava pool or
+a falling icicle can end one. Each level gives you a limited set of callings: choose one from
+the bar, then click or tap a Wyrdling to grant it. Save the quota to clear the level, save more
+for a second star, and find the Golden Spindle for a third.
+
+### The twist: three Norn powers
+
+<p align="center">
+  <img src="docs/images/foresight.png" alt="Foresight preview: a Weaver is armed and hovering a Wyrdling at a gorge edge; a golden thread shows the bridge it would build and the label reads -2 lost" width="854">
+</p>
+
+- **Skuld's Foresight.** Dotted threads show every Wyrdling's next few seconds. A red skull
+  marks a death, a spark marks a rescue, and the HUD counts how many are doomed. Arm a calling
+  and hover a Wyrdling (on touch, press and hold) to see the branched future before you commit.
+  Above, granting Weaver at the gorge edge would leave 2 fewer Wyrdlings lost, so the label is
+  green.
+- **Verðandi's callings.** Grant skills, pause, and fast-forward at 2× or 4×.
+- **Urðr's Rewind.** Hold to unspool up to 20 seconds, or up to 60 with upgrades. Rewinding is
+  never penalised, so experimenting is free.
+
+Every boss attack is telegraphed with a marker or a warning band. The simulation is
+deterministic, so Foresight also predicts exactly who an attack will hit.
+
+### Callings
+
+| Key | Calling | What it does |
+|---|---|---|
+| `1` | Digger | Digs straight down through soft ground. |
+| `2` | Weaver | Weaves 12 golden planks: a rising bridge. |
+| `3` | Warden | Stands firm and turns others back. |
+| `4` | Basher | Tunnels straight ahead. |
+| `5` | Miner | Tunnels diagonally downward. |
+| `6` | Climber | Permanent: scales vertical walls (not smooth rune-iron). |
+| `7` | Glider | Permanent: glides safely from any height and rides updrafts. |
+| `8` | Leaper | One big jump forward over a gap. |
+| `9` | Rune Blast | Plants a rune that bursts 3 s later, carving rock and flinging things. The planter walks on. |
+
+### Controls
+
+| Action | Mouse / keyboard | Touch |
+|---|---|---|
+| Choose a calling | click the bar, or press `1`–`9` | tap the bar |
+| Grant it | press on a Wyrdling (it applies the moment you click) | tap a Wyrdling; press and hold to preview its fate first |
+| Pan | drag empty space, arrow keys or WASD, mouse wheel | drag |
+| Zoom | `+` / `-`, or Ctrl + wheel | pinch |
+| Pause | `Space` or `P` | pause button |
+| Fast-forward 1× / 2× / 4× | `F` | speed button |
+| Rewind | hold `R` (or Backspace) | hold ◀◀ |
+| Foresight on/off | `V` | eye button |
+| Menu | `Esc` | home button |
+
+## Three realms, fifteen levels, three bosses
+
+| Midgard | Niflheim | Muspelheim |
+|---|---|---|
+| 1. First Threads | 1. Frozen Steps | 1. Ember Road |
+| 2. The Weaver's Bridge | 2. Glacier Depths | 2. Stepping Stones |
+| 3. Hold the Line | 3. Avalanche Pass | 3. The Forge |
+| 4. Roots and Wings | 4. Rime Gate | 4. Surtr's Gate |
+| **Boss: The Gnawing Wyrm** | **Boss: Hrímgrímnir, the Frost Jötunn** | **Boss: Surtr's Herald** |
+
+Puzzles are built from physical pieces:
+
+- destructible pixel terrain, and falling sand and snow;
+- rolling boulders that bowl Wyrdlings over, press plates, and cool into stepping stones in lava;
+- plates and levers wired to gates and bridges;
+- snow hoppers, updrafts, crushers, and gas flames that a rune blast can wreck;
+- water and lava.
+
+| Niflheim: a snow hopper pours powder into a pit | Muspelheim: a column of Wyrdlings descends past lava falls |
+|---|---|
+| ![Niflheim level with a snow hopper releasing powder snow](docs/images/niflheim.png) | ![Muspelheim level with Wyrdlings walking down a slope past lava falls](docs/images/muspelheim.png) |
+
+Bosses are hurt only when a Wyrdling steps onto the glowing **Seiðr stone**. Each time one
+fires, another stone lights up somewhere else in the arena.
+
+| The Gnawing Wyrm spits venom | Hrímgrímnir punches down through the ice | A Seiðr beam strikes Surtr's Herald |
+|---|---|---|
+| ![The Gnawing Wyrm rising from the ground and spitting venom](docs/images/wyrm.png) | ![The Frost Jötunn's ice arm slamming down from the ceiling](docs/images/jotunn.png) | ![A Seiðr beam striking Surtr's Herald during a meteor attack](docs/images/herald.png) |
+
+## Progression
+
+- **Stars**: one for meeting the quota, one for the higher target, one for the Golden Spindle.
+- **Threads**: earned per new star (5 each) and for beating your best save count. Spend them at
+  **the Loom**:
+  - longer Foresight (4 → 10 s);
+  - longer Rewind (20 → 60 s);
+  - six hood dyes for your Wyrdlings.
+- **Skuld's Vision** replays a verified solution if you're stuck. It's offered after a failed
+  attempt and in the pause menu.
+
+| The world map | Phone, landscape |
+|---|---|
+| ![World map with the three realms and their levels](docs/images/map.png) | ![The game on a phone in landscape](docs/images/phone.png) |
+
+## Everything is generated in code
+
+There are no image or audio files in the game itself. At startup the game builds:
+
+- **Art**: hue-shifted pixel art, parallax skies, terrain shaded per pixel in a shader, banded 2D
+  lighting and particles.
+- **Audio**: a sample-based synth plays an original soundtrack (title, map, three realm themes,
+  a boss theme with 3 intensity layers, finale, and stingers) plus 63 sound effects.
+
+The view always uses whole-pixel scaling and never shows past a level's edges, at any screen
+size.
+
+## For developers and AI agents
+
+**[AGENTS.md](AGENTS.md)** is the working guide. It covers commands, architecture, the
+invariants you must not break, how to add a level, and the dev-only debug hooks. Other docs:
+
+- [DESIGN.md](DESIGN.md): game design.
+- [docs/ART_SPEC.md](docs/ART_SPEC.md): pixel-art rules.
+- [docs/AUDIO_SPEC.md](docs/AUDIO_SPEC.md): the sound engine and score.
+
+```bash
+npm test             # simulation tests + every level's scripted solution
+npm run typecheck    # TypeScript, no emit
+npm run build        # typecheck + production build to dist/
+```
 
 ```
-src/sim/      deterministic simulation (no DOM): terrain, wyrdlings, physics, sand, bosses,
+src/sim/      deterministic simulation (no DOM): terrain, Wyrdlings, physics, sand, bosses,
               foresight (time-sliced clone-ahead), timeline (rewind), scripted solutions
 src/levels/   level data: terrain shape ops, entities, scripted solution per level
 src/render/   Three.js low-res pipeline, terrain shader, instanced sprites, lights, particles
 src/game/     play scene, view (sim → sprites + juice), input, menus, save/progression, sound map
-src/art/      procedural pixel-art generators (characters, entities, icons, font, materials,
-              backgrounds, bosses, logo)
-src/audio/    offline-synthesised instrument samples, sequencer, songs, SFX
+src/art/      procedural pixel-art generators
+src/audio/    offline-synthesised instruments, sequencer, songs, SFX
+tests/        vitest suites;  scripts/  level previews, traces, browser checks, frame capture
 ```
 
-The simulation only uses IEEE-exact arithmetic (no `Math.random`, `sin`, `pow`). The terrain is
-chunked copy-on-write, so cloning it costs a few hundred pointer copies. That is what makes
-Foresight (a real simulation run ahead on a clone) and Rewind (a ring buffer of clones) cheap.
+The simulation uses only IEEE-exact arithmetic (no `Math.random`, `sin` or `pow`). Its terrain
+is chunked and copy-on-write, so cloning a whole game state is cheap. That is what makes
+Foresight (a real simulation run ahead on a clone) and Rewind (a ring buffer of clones)
+possible.
 
-### Verification
+**How it's verified**
 
-- `npm test` replays every level's scripted solution and checks that it reaches the 2nd-star
-  target, collects the spindle, and defeats the boss.
-- The same suite runs a **null run** (no callings) on every level, which must fail the quota, so
-  no level is trivially won.
-- Other tests cover each skill, clone determinism, copy-on-write isolation, boss behaviour, and
-  that Foresight's predicted deaths match what actually happens.
-- `npm run level:png <id>` renders a level and its solution's trails to a PNG.
-- `npm run level:trace <id> <n>` traces one Wyrdling's states.
-- `npm run smoke <outDir> <url>` drives the title, map and play screens, plus a phone-sized
-  layout, in headless Chromium and fails on any page error.
-- With the dev server running, `node scripts/frames.mjs` steps the simulation to exact ticks and
-  screenshots them (optionally forcing a boss attack), `python3 scripts/sheet.py` builds contact
-  sheets from those frames, and `node scripts/clicktest.mjs` measures how many clicks on walking
-  Wyrdlings actually assign a calling.
+- Every level ships with a scripted solution.
+  - The tests check that it reaches the second-star target, collects the spindle, and defeats
+    the boss.
+  - The tests also check that playing with no callings fails the quota, so no level wins itself.
+- A headless-browser smoke test walks through the title, map, play and phone layouts and fails
+  on any page error.
+- The screenshots on this page were captured with `scripts/frames.mjs`, which steps the
+  simulation to exact ticks.
 
-### Known limits
+**Known limits**
 
 - Nobody has listened to the music or sound effects yet. They are checked only by offline
   rendering: nothing is silent, nothing clips, no NaNs.
-- Boss balance is tuned so a scripted, non-reactive solution wins. Foresight and Rewind should make
-  them comfortable for players, but no human has playtested this yet.
-- Portrait phones get a "rotate" prompt. Landscape is the intended layout.
-- The view never shows past a level's edges, so wide or tall screens zoom in on small levels. Boss
-  arenas are 640×360 so the whole arena fits 16:9 screens at an integer scale.
+- No human playtest yet. Boss balance is tuned so a scripted, non-reactive solution wins.
+- Visual checks ran in headless Chromium. Real phones, Safari/iOS and low-end GPUs are untested.
+- Portrait phones get a "rotate" prompt.
