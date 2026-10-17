@@ -39,6 +39,17 @@ void main() {
   int m = matAt(p);
   int u = ((p.x % 64) + 64) % 64;
   int v = ((p.y % 64) + 64) % 64;
+  if (m == 4) {
+    // falling grains: a run of sand/snow that ends in air (resting on nothing) is drawn as a
+    // sparkling powder instead of a solid slab; about half its pixels show what is behind it
+    int k = 1;
+    for (; k <= 64; k++) { if (matAt(p + ivec2(0, k)) != 4) break; }
+    if (k <= 64 && matAt(p + ivec2(0, k)) == 0) {
+      float h = fract(sin(dot(vec2(p) + vec2(0.0, floor(uTime * 18.0)), vec2(12.9898, 78.233))) * 43758.5453);
+      if (h < 0.5) m = 0;
+      else { outColor = vec4(mix(atl(4, u, v).rgb, atl(4, 1, 112).rgb, 0.45), 1.0); return; }
+    }
+  }
   if (m != 0) {
     int du = 9, dd = 9, dl = 9, dr = 9;
     for (int k = 1; k <= 8; k++) { if (matAt(p + ivec2(0, -k)) == 0) { du = k; break; } }

@@ -89,6 +89,10 @@ Foresight (a real simulation run ahead on a clone) and Rewind (a ring buffer of 
 - `npm run level:trace <id> <n>` traces one Wyrdling's states.
 - `npm run smoke <outDir> <url>` drives the title, map and play screens, plus a phone-sized
   layout, in headless Chromium and fails on any page error.
+- With the dev server running, `node scripts/frames.mjs` steps the simulation to exact ticks and
+  screenshots them (optionally forcing a boss attack), `python3 scripts/sheet.py` builds contact
+  sheets from those frames, and `node scripts/clicktest.mjs` measures how many clicks on walking
+  Wyrdlings actually assign a calling.
 
 ### Known limits
 
@@ -97,3 +101,5 @@ Foresight (a real simulation run ahead on a clone) and Rewind (a ring buffer of 
 - Boss balance is tuned so a scripted, non-reactive solution wins. Foresight and Rewind should make
   them comfortable for players, but no human has playtested this yet.
 - Portrait phones get a "rotate" prompt. Landscape is the intended layout.
+- The view never shows past a level's edges, so wide or tall screens zoom in on small levels. Boss
+  arenas are 640×360 so the whole arena fits 16:9 screens at an integer scale.

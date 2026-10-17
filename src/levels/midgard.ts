@@ -1,5 +1,6 @@
 // Midgard — the tutorial realm. Each level teaches one calling, then the boss combines them.
 import type { LevelDef } from '../sim/level';
+import { padLevel } from './pad';
 
 export const M1: LevelDef = {
   id: 'm1', name: 'First Threads', realm: 'midgard', music: 'midgard',
@@ -191,4 +192,5 @@ export const M5: LevelDef = {
   ],
 };
 
-export const MIDGARD: LevelDef[] = [M1, M2, M3, M4, M5];
+// boss arena grown to 640×360 (see pad.ts)
+export const MIDGARD: LevelDef[] = [M1, M2, M3, M4, padLevel(M5, 60)];

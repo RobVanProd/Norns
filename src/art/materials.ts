@@ -476,13 +476,13 @@ function sand(P: RealmPal, realm: RealmId, seed: number): Tiles {
   const grain = fbmT(seed + 3, S, 4, 2);
   const big = fbmT(seed + 8, S, 32, 2);
   const ph1 = hash2(1, 1, seed) * TAU, ph2 = hash2(2, 1, seed) * TAU;
-  const amp = realm === 'niflheim' ? 0.06 : 0.1;
+  const amp = realm === 'niflheim' ? 0.14 : 0.1;
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
     const ph = y + 2.6 * Math.sin((x * TAU) / 64 + ph1) + 1.4 * Math.sin((x * TAU * 3) / 64 + ph2);
     const band = wrapi(ph, 8);
     const rip = band < 1 ? 1 : band < 2 ? 0.5 : band > 6 ? -0.7 : 0;
     const g = grain(x, y);
-    let v = 0.52 + rip * amp + (g - 0.5) * (realm === 'niflheim' ? 0.18 : 0.42) + (big(x, y) - 0.5) * 0.2;
+    let v = 0.52 + rip * amp + (g - 0.5) * (realm === 'niflheim' ? 0.3 : 0.42) + (big(x, y) - 0.5) * (realm === 'niflheim' ? 0.34 : 0.2);
     if (realm === 'muspelheim') v += (g > 0.68 ? -0.18 : 0);
     t.body.set(x, y, pick(rmp, v));
   }
@@ -492,7 +492,9 @@ function sand(P: RealmPal, realm: RealmId, seed: number): Tiles {
     for (let k = 0; k < 16; k++) { const x = rng() * 64, y = rng() * 64; t.body.setWrap(x, y, rmp[1]); t.body.setWrap(x + 1, y, rmp[5]); }
     for (let k = 0; k < 3; k++) pebble(t.body, rng() * 64, rng() * 64, 1.3, 0.9, P.pebble.slice(1, 6), true, rmp[1]);
   } else if (realm === 'niflheim') {
-    for (let k = 0; k < 14; k++) t.body.setWrap(rng() * 64, rng() * 64, P.sand.alt[2]);
+    // wind-packed snow: crystalline glints and small blue-shadowed hollows
+    for (let k = 0; k < 26; k++) t.body.setWrap(rng() * 64, rng() * 64, P.sand.alt[2]);
+    for (let k = 0; k < 12; k++) { const x = rng() * 64, y = rng() * 64; t.body.setWrap(x, y, rmp[1]); t.body.setWrap(x + 1, y, rmp[2]); t.body.setWrap(x, y - 1, rmp[6]); }
   } else {
     for (let k = 0; k < 9; k++) { const x = rng() * 64, y = rng() * 64; t.body.setWrap(x, y, P.sand.alt[1]); t.body.setWrap(x + 1, y, rmp[1]); }
     for (let k = 0; k < 10; k++) { const x = rng() * 64, y = rng() * 64; t.body.setWrap(x, y, rmp[0]); t.body.setWrap(x + 1, y, rmp[1]); }

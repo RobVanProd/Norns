@@ -1,5 +1,6 @@
 // Muspelheim — realm of fire: rune blasts, boulders that become stepping stones, forges and flame.
 import type { LevelDef } from '../sim/level';
+import { padLevel } from './pad';
 
 export const U1: LevelDef = {
   id: 'u1', name: 'Ember Road', realm: 'muspelheim', music: 'muspelheim',
@@ -206,4 +207,5 @@ export const U5: LevelDef = {
   ],
 };
 
-export const MUSPELHEIM: LevelDef[] = [U1, U2, U3, U4, U5];
+// boss arena grown to 640×360 (see pad.ts)
+export const MUSPELHEIM: LevelDef[] = [U1, U2, U3, U4, padLevel(U5, 40)];

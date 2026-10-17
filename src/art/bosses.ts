@@ -404,6 +404,32 @@ function jotFist(): Px {
   return p;
 }
 
+/** Forearm tile for the slam: a frost-skinned cylinder with rime plates, tiling vertically (period 16). */
+function jotArm(): Px {
+  const W = 22, H = 16;
+  const p = new Px(W, H);
+  const F = BOSS.frostSkin, R = BOSS.rime, G = BOSS.glacier;
+  for (let y = 0; y < H; y++) {
+    const sw = Math.round(Math.sin((y / H) * Math.PI * 2) * 0.6); // slight muscle swell, periodic
+    const x0 = 2 - sw, x1 = W - 3 + sw;
+    for (let x = x0; x <= x1; x++) {
+      const u = (x - x0) / (x1 - x0);
+      // lit from the upper left: highlight band, mid body, core shadow, reflected rim
+      let c = u < 0.12 ? F[6] : u < 0.3 ? F[5] : u < 0.62 ? F[4] : u < 0.85 ? F[3] : F[2];
+      if (x === x0 || x === x1) c = F[0];
+      p.set(x, y, c);
+    }
+  }
+  // rime plates and frost cracks
+  for (const [cx, cy] of [[7, 3], [14, 10]]) {
+    for (let dx = -2; dx <= 2; dx++) p.set(cx + dx, cy, dx === -2 ? R[5] : R[3]);
+    for (let dx = -1; dx <= 1; dx++) p.set(cx + dx, cy + 1, R[2]);
+  }
+  p.set(5, 12, G[6]); p.set(6, 12, G[4]); p.set(16, 5, G[6]);
+  for (let y = 6; y < 9; y++) p.set(10, y, F[2]);
+  return p;
+}
+
 function jotIcicle(): Px {
   const p = new Px(8, 20);
   const G = BOSS.glacier;
@@ -661,6 +687,7 @@ export function buildBossSprites(): SpriteLib {
     'jotunn.body.slam': anim([jotunn('slam')], 64, 111),
     'jotunn.body.hurt': anim([recoil(flash(j0, pale), -3)], 64, 111),
     'jotunn.fist': anim([jotFist()], 18, 29),
+    'jotunn.arm': anim([jotArm()], 11, 0),
     'jotunn.icicle': anim([jotIcicle()], 4, 19),
     'herald.body.idle': anim([h0, herald('idle1')], 56, 127),
     'herald.body.raise': anim([herald('raise')], 56, 127),

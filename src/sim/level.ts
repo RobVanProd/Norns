@@ -116,6 +116,9 @@ export interface LevelDef {
   solution: SolutionStep[];
   /** minimum saves the scripted solution must reach (default: target) */
   solutionSaves?: number;
+  /** set by padLevel(): terrain ops are rasterised on a w×h canvas and embedded `top` px down,
+   *  with the top row extended upward (and the right column rightward, if w is narrower) */
+  raster?: { top: number; w: number; h: number };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -161,6 +164,23 @@ function surfaceAt(pts: Pt[], x: number): number | null {
 
 /** Rasterise all terrain ops. Returns the terrain (with static back wall). */
 export function buildTerrain(def: LevelDef): Terrain {
+  if (def.raster) {
+    // rasterise exactly as authored (same noise, same edges), then embed in the grown canvas
+    const { top, w: w0, h: h0 } = def.raster;
+    const inner = buildTerrain({ ...def, width: w0, height: h0, raster: undefined });
+    const W = def.width, H = def.height;
+    const back = new Uint8Array(W * H);
+    const out = new Terrain(W, H, back);
+    for (let y = 0; y < H; y++) {
+      const sy = Math.min(h0 - 1, Math.max(0, y - top));
+      for (let x = 0; x < W; x++) {
+        const sx = Math.min(w0 - 1, x);
+        out.set(x, y, inner.getRaw(sx, sy));
+        back[y * W + x] = inner.backWall[sy * w0 + sx];
+      }
+    }
+    return out;
+  }
   const { width: w, height: h } = def;
   const back = new Uint8Array(w * h);
   const terrain = new Terrain(w, h, back);

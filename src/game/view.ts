@@ -722,14 +722,24 @@ export class GameView {
         break;
       }
       case 'slam': {
+        // a giant ice arm punches down through the ceiling and draws back up; drawn before the
+        // terrain so the ceiling hides the arm where it passes through
+        let ceil = h.y0 - 40;
+        while (ceil > 0 && !sim.solid(h.x0, ceil)) ceil--;
+        const hidden = ceil + 30; // fist bottom tucked up inside the ceiling
+        const arm = (fistY: number) => {
+          for (let y = fistY - 30; y > ceil - 16; y -= 16) this.behind.push(this.f('jotunn.arm'), h.x0, y - 16);
+          this.behind.push(this.f('jotunn.fist'), h.x0, fistY);
+        };
         if (warn) {
           const k = h.t / h.warn;
           const r = 12 + (1 - k) * 10;
           O.push(this.f('target', Math.floor(time * 12)), h.x0, h.y0 - 3, { r: 1, g: 0.3, b: 0.25, sx: r / 7, sy: r / 14, smooth: true });
-          this.actors.push(this.f('jotunn.fist'), h.x0, h.y0 - 100 * (1 - k * k) - 2);
+          arm(hidden + (h.y0 - hidden) * k * k - 2 * (1 - k));
+          if (h.t < 6 && Math.random() < 0.6) this.matDebris(sim, h.x0 + (Math.random() - 0.5) * 20, ceil + 2, 2, 1);
         } else {
           const k = h.t - h.warn;
-          if (k < 10) this.actors.push(this.f('jotunn.fist'), h.x0, h.y0);
+          if (k < 22) { const e = Math.max(0, (k - 8) / 14); arm(h.y0 + (hidden - h.y0) * e * e); }
           for (const s of [-1, 1]) {
             const x = h.x0 + s * h.p;
             if (k < h.dur) for (let i = 0; i < 3; i++) this.sparks.spawn(x, h.y0 - Math.random() * 6, s * 0.3, -0.5 - Math.random(), 16, 0.8, 0.95, 1, 0.9, 1, 0.05);

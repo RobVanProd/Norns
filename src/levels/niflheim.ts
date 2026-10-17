@@ -1,5 +1,6 @@
 // Niflheim — realm of ice and mist: leaps, mining, snow that slides, boulders and gates.
 import type { LevelDef } from '../sim/level';
+import { padLevel } from './pad';
 
 export const N1: LevelDef = {
   id: 'n1', name: 'Frozen Steps', realm: 'niflheim', music: 'niflheim',
@@ -204,4 +205,5 @@ export const N5: LevelDef = {
   ],
 };
 
-export const NIFLHEIM: LevelDef[] = [N1, N2, N3, N4, N5];
+// boss arena grown to 640×360 (see pad.ts)
+export const NIFLHEIM: LevelDef[] = [N1, N2, N3, N4, padLevel(N5, 40, 40)];
