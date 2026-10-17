@@ -12,7 +12,10 @@ const js = assets.filter((f) => f.endsWith('.js')).map((f) => readFileSync(`dist
 const css = assets.filter((f) => f.endsWith('.css')).map((f) => readFileSync(`dist-single/assets/${f}`, 'utf8'));
 let html = readFileSync('dist-single/index.html', 'utf8');
 const body = html.slice(html.indexOf('<body>') + 6, html.indexOf('</body>')).replace(/<script[^>]*src=[^>]*><\/script>/g, '');
-const head = `<title>Norns</title>
+// third-party license notices travel with the file (the minified bundle drops them)
+const notices = readFileSync('public/THIRD_PARTY_NOTICES.txt', 'utf8').replace(/--/g, '- -');
+const head = `<!--\n${notices}\n-->
+<title>Norns</title>
 <meta name="theme-color" content="#0d0b14">
 <style>${css.join('\n')}</style>`;
 const script = js.map((j) => `<script type="module">${j.replace(/<\/script/gi, '<\\/script')}</script>`).join('\n');

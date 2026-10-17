@@ -12,6 +12,11 @@
 </p>
 
 <p align="center">
+  <a href="https://robvanprod.github.io/Norns/"><b>▶ Play free in your browser</b></a> &nbsp;·&nbsp;
+  <a href="docs/trailer.mp4"><b>Watch the trailer</b></a> &nbsp;·&nbsp; free to play, all rights reserved
+</p>
+
+<p align="center">
   <img src="docs/images/bridge.gif" alt="A Weaver lays a rising golden bridge across a gorge while the line of Wyrdlings follows" width="854">
 </p>
 
@@ -20,9 +25,20 @@ toward their doom. You can't carry them, but you can grant them callings (skills
 one's fate before it happens**, and **rewind time** when fate goes wrong. Lead enough of them
 home through the Root Gate to clear a level.
 
+## Trailer
+
+<p align="center">
+  <a href="docs/trailer.mp4"><img src="docs/images/trailer-poster.png" alt="Play the NORNS trailer" width="854"></a><br>
+  <sub>27 seconds, captured from the game itself with its own soundtrack (MP4). Click the image to watch.</sub>
+</p>
+
 ## Play it
 
-You need [Node.js](https://nodejs.org) 20.19+ or 22.12+ (CI uses 22).
+**Online:** [robvanprod.github.io/Norns](https://robvanprod.github.io/Norns/). It's free, with nothing to
+install and nothing to buy. It runs on desktop and phone browsers, and the site is rebuilt from
+`main` on every push.
+
+**On your own machine:** you need [Node.js](https://nodejs.org) 20.19+ or 22.12+ (CI uses 22).
 
 ```bash
 npm install
@@ -151,6 +167,26 @@ There are no image or audio files in the game itself. At startup the game builds
 
 The view always uses whole-pixel scaling and never shows past a level's edges, at any screen
 size.
+
+## Free to play, all rights reserved
+
+NORNS is free to play, with no ads and nothing to buy.
+
+The source code is public so you can see how it's made, but **no license is granted**. Copying,
+modifying, redistributing or reusing its code, art, music or levels needs written permission
+from the author. GitHub's Terms of Service let people view and fork public repositories on
+GitHub; nothing beyond that is granted.
+
+© 2026 RobVanProd. All rights reserved.
+
+Third-party components keep their own licenses:
+
+- [three.js](https://threejs.org/) (MIT);
+- the [Pixelify Sans](https://fontsource.org/fonts/pixelify-sans) and
+  [Silkscreen](https://fontsource.org/fonts/silkscreen) fonts (SIL Open Font License 1.1).
+
+Their notices are in [public/THIRD_PARTY_NOTICES.txt](public/THIRD_PARTY_NOTICES.txt) and ship
+with every build.
 
 ## For developers and AI agents
 

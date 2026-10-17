@@ -30,6 +30,7 @@ Vitest.
 | Exact-tick screenshots | `node scripts/frames.mjs <url> <outDir> <w> <h> <ticks> [options]` (see the file header) |
 | Contact sheet | `python3 scripts/sheet.py out.png <cols> <scale> <images...>` |
 | Click reliability | `node scripts/clicktest.mjs <baseUrl> [level] [drift] [body\|hood]` |
+| Trailer | `node scripts/trailer.mjs <devServerUrl> [workDir] [out.mp4]` (needs ffmpeg; about 4 min) |
 | Audio render check | `node scripts/audio-check.mjs --url <devServerUrl>` (flags silence, clipping, NaNs) |
 
 The browser scripts use `playwright-core` with Chromium at `/opt/pw-browsers/chromium` and
@@ -152,6 +153,9 @@ These exist only in dev builds (`import.meta.env.DEV`). Production builds strip 
   - `solution`: set `new window.__norns.SolutionPlayer(scene.cfg.level.solution)` to script play
     mode.
   - `armed` and `hoverPt` drive the calling and hover (for Foresight previews).
+- `window.__norns.manual(true)` stops the real-time loop. `window.__norns.step(dt)` then advances and
+  renders exactly one frame of `dt` seconds. `scripts/trailer.mjs` films this way, so the simulation,
+  particles and animation stay in true time however slow the browser is.
 - Example: a forced boss attack captured at exact ticks.
   ```bash
   node scripts/frames.mjs "http://localhost:5173/?level=n5&go" out 1280 720 322,330 \
@@ -160,6 +164,19 @@ These exist only in dev builds (`import.meta.env.DEV`). Production builds strip 
 
 Save data is `localStorage['norns.save.v1']`. Delete it, or use Settings → Erase progress, to
 start fresh.
+
+## Deployment and licensing
+
+- `.github/workflows/pages.yml` publishes `dist/` (plus `docs/trailer.mp4`) to GitHub Pages on
+  every push to `main`.
+  - It needs the one-time owner setting Settings → Pages → Source: "GitHub Actions".
+  - Without that setting it prints a notice and skips, rather than failing.
+- The game is free to play but **proprietary**: `package.json` says `"license": "UNLICENSED"` and
+  there is deliberately no LICENSE file. Don't add one.
+- Every bundled third-party package must have its license text in
+  `public/THIRD_PARTY_NOTICES.txt`. Vite copies that file into every build, and
+  `scripts/artifact.mjs` embeds it in the single-file build. Add the notice when you add a runtime
+  dependency. Today they are three.js (MIT) and the two Fontsource fonts (OFL-1.1).
 
 ## Conventions
 

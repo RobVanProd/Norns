@@ -58,7 +58,12 @@ export class Game {
     } else this.showTitle();
     requestAnimationFrame((t) => this.frame(t));
     // dev-only hook for scripts/frames.mjs, scripts/clicktest.mjs and agents (see AGENTS.md)
-    if (import.meta.env.DEV) (window as unknown as { __norns: unknown }).__norns = { scene: () => this.scene, SolutionPlayer };
+    if (import.meta.env.DEV) {
+      (window as unknown as { __norns: unknown }).__norns = {
+        scene: () => this.scene, SolutionPlayer,
+        manual: (on: boolean) => this.setManualClock(on), step: (dt: number) => this.debugStep(dt),
+      };
+    }
   }
 
   private resize(): void {
@@ -91,6 +96,26 @@ export class Game {
   private frame(t: number): void {
     const dt = Math.min(0.1, (t - this.last) / 1000);
     this.last = t;
+    if (this.manualClock === null) this.advance(dt, t / 1000);
+    requestAnimationFrame((tt) => this.frame(tt));
+  }
+
+  /** Dev tooling (scripts/trailer.mjs): seconds on the manual clock, or null for real time. */
+  private manualClock: number | null = null;
+
+  /** Dev tooling: stop the real-time loop; frames then advance only through debugStep(). */
+  setManualClock(on: boolean): void {
+    this.manualClock = on ? 0 : null;
+  }
+
+  /** Dev tooling: advance and render exactly one frame of `dt` seconds on the manual clock. */
+  debugStep(dt: number): void {
+    if (this.manualClock === null) return;
+    this.manualClock += dt;
+    this.advance(dt, this.manualClock);
+  }
+
+  private advance(dt: number, now: number): void {
     if (this.scene) {
       this.scene.update(dt);
       this.scene.render();
@@ -99,8 +124,7 @@ export class Game {
       this.captionEl.textContent = cap ?? '';
       this.captionEl.classList.toggle('show', !!cap);
     }
-    this.p.render(t / 1000);
-    requestAnimationFrame((tt) => this.frame(tt));
+    this.p.render(now);
   }
 
   private music(id: SongId): void {
