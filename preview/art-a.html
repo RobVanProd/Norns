@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>NORNS art preview A — characters, entities, icons, font</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 12px; background: #12111a; color: #d8d2e6; font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; }
+      h1 { font-size: 16px; margin: 0 0 6px; }
+      h2 { font-size: 13px; margin: 14px 0 6px; color: #f2c14e; }
+      .note { color: #8a84a0; margin-bottom: 6px; }
+      canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+      .anim { display: grid; grid-template-columns: 150px auto auto; gap: 4px 10px; align-items: center; margin-bottom: 4px; }
+      .label { font-size: 11px; color: #c9c2dc; }
+      .label small { color: #8a84a0; display: block; }
+      .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+      figure { margin: 0; display: flex; flex-direction: column; gap: 3px; align-items: center; }
+      figcaption { font-size: 10px; color: #a49cb8; }
+      .pair { display: flex; gap: 6px; }
+      #timing { white-space: pre; color: #9fe0a0; }
+    </style>
+  </head>
+  <body>
+    <h1>NORNS — characters, entities, icons &amp; font (preview A)</h1>
+    <div class="note">?section=wyrd,read,ent,icons,font &amp;scale=4 &amp;only=walk,fall (substring filter on keys) &amp;anim=0 hides live animations</div>
+    <div id="timing"></div>
+    <div id="root"></div>
+    <script type="module" src="./art-a.ts"></script>
+  </body>
+</html>

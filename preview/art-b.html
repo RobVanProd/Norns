@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>NORNS art preview B — environment &amp; bosses</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 16px; background: #15131c; color: #d8d2e6; font: 13px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+      body.focused { padding: 0; }
+      h1 { font-size: 18px; margin: 0 0 8px; }
+      h2 { font-size: 14px; margin: 24px 0 8px; color: #f2c14e; }
+      body.focused h1, body.focused h2, body.focused .note { display: none; }
+      section { margin-bottom: 16px; }
+      .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+      figure { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+      figcaption { font-size: 11px; color: #a49cb8; }
+      canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+      .checker { background: repeating-conic-gradient(#2a2734 0% 25%, #221f2b 0% 50%) 50% / 16px 16px; }
+      .note { color: #8a84a0; }
+      #timing { white-space: pre; }
+    </style>
+  </head>
+  <body>
+    <h1>NORNS — environment, bosses &amp; title art (preview B)</h1>
+    <div class="note">?section=&lt;id prefix&gt; focuses one part: scene-midgard, mats-niflheim, atlas-muspelheim, bg-midgard, bosses-wyrm, title, timing … &amp;lit=0 disables mock lighting.</div>
+    <div id="root"></div>
+    <script type="module" src="./art-b.ts"></script>
+  </body>
+</html>
