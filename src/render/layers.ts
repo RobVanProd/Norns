@@ -70,6 +70,7 @@ uniform float uPar;
 uniform float uBottom;
 uniform float uTime;
 uniform float uDrift;
+uniform float uExtend;
 out vec4 outColor;
 void main() {
   float sx = gl_FragCoord.x;
@@ -77,12 +78,35 @@ void main() {
   float camBottom = max(0.0, uLevel.y - uView.w);
   float layerBottom = uView.w - uBottom + (camBottom - uView.y) * uPar * 0.6;
   float ly = sy - (layerBottom - uTexSize.y);
-  if (ly < 0.0 || ly >= uTexSize.y) discard;
+  if (ly < 0.0) discard;
+  float below = ly - uTexSize.y;
+  if (below >= 0.0) {
+    // a grounded layer keeps going below its bottom edge, so gorges and holes never show where the
+    // art ends: its last 4 rows tile downward (keeping the 4x4 dither intact), darkening with depth
+    if (uExtend < 0.5) discard;
+    ly = uTexSize.y - 4.0 + mod(below, 4.0);
+  }
   float lx = floor(sx + uView.x * uPar + uTime * uDrift);
   vec4 c = texelFetch(uTex, ivec2(int(mod(lx, uTexSize.x)), int(ly)), 0);
   if (c.a < 0.5) discard;
+  if (below >= 0.0) {
+    ivec2 b = ivec2(mod(gl_FragCoord.xy, 4.0));
+    int m[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+    float d = floor(clamp(below / 90.0, 0.0, 1.0) * 5.0 + (float(m[b.x + b.y * 4]) + 0.5) / 16.0) / 5.0;
+    c.rgb *= 1.0 - 0.5 * d;
+  }
   outColor = vec4(c.rgb, 1.0);
 }`;
+
+/** A layer whose bottom row is (nearly) all opaque stands on the ground and may be extended downward. */
+function grounded(cv: HTMLCanvasElement): boolean {
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  const row = ctx.getImageData(0, cv.height - 1, cv.width, 1).data;
+  let n = 0;
+  for (let i = 3; i < row.length; i += 4) if (row[i] >= 128) n++;
+  return n >= cv.width * 0.9;
+}
 
 export class Background {
   readonly meshes: THREE.Mesh[] = [];
@@ -108,7 +132,7 @@ export class Background {
         uniforms: {
           uTex: { value: tex }, uTexSize: { value: new THREE.Vector2(layer.canvas.width, layer.canvas.height) },
           uView: { value: view }, uLevel: { value: level }, uPar: { value: layer.parallax }, uBottom: { value: layer.bottomOffset },
-          uTime: { value: 0 }, uDrift: { value: 0 },
+          uTime: { value: 0 }, uDrift: { value: 0 }, uExtend: { value: grounded(layer.canvas) ? 1 : 0 },
         },
         depthTest: false, depthWrite: false, transparent: true,
       });

@@ -193,7 +193,7 @@ body.portrait:not(.rotate-ok) #rotate {
 .hud { position: absolute; inset: 0; }
 .hud-top { position: absolute; top: calc(8px + var(--safe-t)); left: calc(8px + var(--safe-l)); right: calc(8px + var(--safe-r)); display: flex; align-items: flex-start; gap: 10px; pointer-events: none; }
 .hud-top > * { pointer-events: auto; }
-.hud-name { flex: 1; font-size: 18px; text-shadow: 2px 2px 0 #000; padding-top: 10px; color: var(--ink); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud-name { flex: 1; pointer-events: none !important; font-size: 18px; text-shadow: 2px 2px 0 #000; padding-top: 10px; color: var(--ink); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .counters { display: flex; align-items: center; gap: 12px; padding: 6px 12px; }
 .ctr { display: flex; align-items: center; gap: 6px; font: 18px var(--font-num); }
 .ctr .num.met { color: #9fe07a; }

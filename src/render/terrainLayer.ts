@@ -27,6 +27,11 @@ int matAt(ivec2 p) {
   return int(texelFetch(uMask, clampLevel(p), 0).r * 255.0 + 0.5);
 }
 vec4 atl(int m, int u, int row) { return texelFetch(uMat, ivec2(m * 64 + u, row), 0); }
+float bayer(ivec2 f) {
+  ivec2 i = f % 4;
+  int t[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+  return (float(t[i.x + i.y * 4]) + 0.5) / 16.0;
+}
 
 void main() {
   ivec2 frag = ivec2(gl_FragCoord.xy);
@@ -61,7 +66,19 @@ void main() {
   vec4 col = vec4(0.0);
   float bw = 0.0;
   bw = texelFetch(uMask, clampLevel(p), 0).g;
-  if (bw > 0.25) col = vec4(texelFetch(uBack, ivec2(u, v), 0).rgb * 0.55, 1.0);
+  if (bw > 0.25) {
+    vec3 b = texelFetch(uBack, ivec2(u, v), 0).rgb;
+    b = mix(b, vec3(dot(b, vec3(0.299, 0.587, 0.114))), 0.3) * 0.48;
+    // contact shadow where a cave meets solid terrain (strongest under ceilings), so air and rock
+    // never read alike even when the back wall shares the rock's texture
+    int near = 7;
+    for (int k = 1; k <= 6; k++) { if (matAt(p + ivec2(0, -k)) != 0) { near = k; break; } }
+    for (int k = 1; k <= 4; k++) { if (matAt(p + ivec2(-k, 0)) != 0 || matAt(p + ivec2(k, 0)) != 0) { near = min(near, k + 1); break; } }
+    for (int k = 1; k <= 3; k++) { if (matAt(p + ivec2(0, k)) != 0) { near = min(near, k + 2); break; } }
+    float occ = float(7 - near) / 6.0;
+    b *= 1.0 - 0.5 * floor(occ * 3.0 + bayer(frag)) / 3.0;
+    col = vec4(b, 1.0);
+  }
   bool dug = bw > 0.75;
   for (int d = 1; d <= 16 && !dug; d++) {
     int mb = matAt(p + ivec2(0, d));

@@ -8,7 +8,7 @@ import { Background, LiquidLayer, Particles, canvasTex } from '../render/layers'
 import type { Pipeline } from '../render/pipeline';
 import { SpriteBatch, type SpriteOpts } from '../render/spriteBatch';
 import { TerrainLayer } from '../render/terrainLayer';
-import { bossCore, bossPhase, magmaLevel } from '../sim/boss';
+import { bossCore, bossPhase, magmaLevel, surfaceY } from '../sim/boss';
 import type { SkillId } from '../sim/constants';
 import type { Fate } from '../sim/foresight';
 import type { Sim } from '../sim/sim';
@@ -71,6 +71,17 @@ const SKILL_COLORS: Record<SkillId, [number, number, number]> = {
   digger: [0.95, 0.65, 0.3], weaver: [1, 0.82, 0.35], warden: [1, 0.9, 0.45], basher: [0.95, 0.55, 0.3],
   miner: [0.9, 0.6, 0.35], climber: [0.45, 0.85, 1], glider: [0.55, 1, 0.7], leaper: [0.5, 0.75, 1], blast: [1, 0.35, 0.3],
 };
+
+/** Wyrm burrow, in px below its perch: rear up, plunge out of sight, stay under while the strike
+ *  erupts at the marker, then resurface before the attack ends (act length 90 ticks). */
+function wyrmSink(at: number): number {
+  if (at <= 0) return 0;
+  if (at < 5) return -at * 1.5;
+  if (at < 19) { const e = (at - 5) / 14; return -7.5 + e * e * 167.5; }
+  if (at < 76) return 160;
+  const e = Math.min(1, (at - 76) / 14);
+  return 160 * (1 - e) * (1 - e);
+}
 
 export class GameView {
   readonly atlas: Atlas;
@@ -559,26 +570,27 @@ export class GameView {
     const phase = bossPhase(b);
     if (b.kind === 'wyrm') {
       const attacking = b.act === 'venom' && b.at >= 10;
-      const diving = b.act === 'burrow' && b.at > 0 && b.at < 80;
-      const sink = diving ? Math.min(60, b.at * 3) - Math.max(0, (b.at - 60) * 3) : 0;
+      const sink = (b.act === 'burrow' ? wyrmSink(b.at) : 0) + (dying ? b.dying * 0.9 : 0);
       const bob = Math.sin(time * 2) * 3;
-      const hx = b.x + shakeX, hy = b.y + bob + sink + (dying ? b.dying * 0.6 : 0);
-      // spine: segments trail down-right into the ground
-      const segs = 7;
-      for (let i = segs; i >= 1; i--) {
-        const t = i / segs;
-        const sx = hx + 10 + i * 12 + Math.sin(time * 2.2 - i * 0.8) * 4;
-        const sy = hy + 8 + i * 9 + Math.sin(time * 1.7 - i * 0.6) * 3;
-        const nx = hx + 10 + (i - 1) * 12 + Math.sin(time * 2.2 - (i - 1) * 0.8) * 4;
-        const ny = hy + 8 + (i - 1) * 9 + Math.sin(time * 1.7 - (i - 1) * 0.6) * 3;
-        const rot = Math.atan2(ny - sy, nx - sx);
-        const key = i === segs ? 'wyrm.tail' : 'wyrm.body';
-        this.actors.push(this.f(key), sx, sy, { ...flash, rot, flip: true, sx: 1 - t * 0.25, sy: 1 - t * 0.25, a: fade, smooth: true });
-      }
+      const hx = b.x + shakeX, hy = b.y + bob + sink;
+      // The neck rises out of the ground behind the perch. Everything is drawn before the terrain,
+      // so the ground hides the part below the surface, and the whole Wyrm once it burrows.
+      const entryX = b.x + 40;
+      const surf = surfaceY(sim, entryX, b.y);
+      const o: SpriteOpts = { ...flash, a: fade };
+      this.wyrmNeck(this.behind, [
+        hx + 12, hy + 8,
+        hx + 34 + Math.sin(time * 2.2) * 4, hy + 16,
+        entryX + 4 + Math.sin(time * 1.7 + 1) * 5, surf - 60 + sink,
+        entryX, surf + 40 + sink,
+      ], 0.9, 1.15, o);
       const head = b.hurt > 0 ? 'wyrm.head.hurt' : attacking ? 'wyrm.head.open' : 'wyrm.head.idle';
-      this.actors.push(this.f(head, Math.floor(time * 3)), hx, hy, { ...flash, flip: true, a: fade });
-      if (attacking) this.light(hx - 18, hy, 40, 0.5, 1, 0.3, 0.9);
-      this.light(hx, hy, 80, 0.5, 0.6, 0.4, 0.4);
+      this.behind.push(this.f(head, Math.floor(time * 3)), hx, hy, { ...o, flip: true });
+      if (b.act === 'burrow' && ((b.at > 9 && b.at < 20) || (b.at > 75 && b.at < 86))) this.matDebris(sim, entryX + (Math.random() - 0.5) * 24, surf, 2, 2.2);
+      if (sink < 60) {
+        if (attacking) this.light(hx - 18, hy, 40, 0.5, 1, 0.3, 0.9);
+        this.light(hx, hy, 80, 0.5, 0.6, 0.4, 0.4);
+      }
     } else if (b.kind === 'jotunn') {
       const pose = b.hurt > 0 ? 'jotunn.body.hurt' : b.act === 'breath' && b.at < 40 ? 'jotunn.body.inhale' : b.act === 'slam' && b.at < 36 ? 'jotunn.body.slam' : 'jotunn.body.idle';
       const breathe = Math.round(Math.sin(time * 1.5) * 1.5);
@@ -596,6 +608,33 @@ export class GameView {
       this.light(b.x - 10, b.y - 70, 110, 1.3, 0.55, 0.2, 0.9 + 0.1 * Math.sin(time * 5));
     }
     void tick;
+  }
+
+  /** Wyrm neck: overlapping body segments along a cubic Bézier from the head (p0) into the ground (p3). */
+  private wyrmNeck(batch: SpriteBatch, c: number[], s0: number, s1: number, o: SpriteOpts): void {
+    const N = 48;
+    const xs: number[] = [], ys: number[] = [], len: number[] = [0];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N, u = 1 - t;
+      const a = u * u * u, b = 3 * u * u * t, d = 3 * u * t * t, e = t * t * t;
+      xs.push(a * c[0] + b * c[2] + d * c[4] + e * c[6]);
+      ys.push(a * c[1] + b * c[3] + d * c[5] + e * c[7]);
+      if (i) len.push(len[i - 1] + Math.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]));
+    }
+    const total = len[N];
+    const segs: number[][] = [];
+    let j = 0;
+    for (let dist = 4; dist < total; dist += 8) {
+      while (j < N - 1 && len[j + 1] < dist) j++;
+      const k = (dist - len[j]) / Math.max(1e-6, len[j + 1] - len[j]);
+      // rotation points the sprite's +x toward the tail, which puts its belly (+y) on the front side
+      segs.push([xs[j] + (xs[j + 1] - xs[j]) * k, ys[j] + (ys[j + 1] - ys[j]) * k,
+        Math.atan2(ys[j + 1] - ys[j], xs[j + 1] - xs[j]), s0 + (s1 - s0) * (dist / total)]);
+    }
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const [x, y, rot, sc] = segs[i];
+      batch.push(this.f('wyrm.body'), x, y, { ...o, rot, sx: sc, sy: sc, smooth: true });
+    }
   }
 
   private drawHazards(sim: Sim, time: number): void {
@@ -634,9 +673,17 @@ export class GameView {
           if (Math.random() < 0.5 * k) this.matDebris(sim, h.x0 + (Math.random() - 0.5) * 20, h.y0, 1, 1.2);
           this.shake = Math.max(this.shake, k * 1.5);
         } else {
+          // the head bursts up out of the ground on a curved neck, leaning to one side, then sinks back
           const k = (h.t - h.warn) / h.dur;
-          const rise = Math.sin(k * Math.PI) * 30;
-          this.actors.push(this.f('wyrm.head.open', 0), h.x0, h.y0 - rise, { rot: -Math.PI / 2, smooth: true });
+          const rise = 50 * (k < 0.2 ? Math.sin((k / 0.2) * Math.PI / 2) : k > 0.65 ? Math.cos(((k - 0.65) / 0.35) * Math.PI / 2) : 1);
+          const side = h.x0 % 2 === 0 ? -1 : 1;
+          const lean = 0.42 + Math.sin(time * 14) * 0.04;
+          const fx = side * Math.sin(lean), fy = -Math.cos(lean); // facing direction
+          const cx = h.x0 + fx * 6, cy = h.y0 + 30 - rise;
+          this.wyrmNeck(this.behind, [cx - fx * 16, cy - fy * 16, cx - fx * 30, cy - fy * 30, h.x0 - side * 2, h.y0 + 24, h.x0, h.y0 + 70], 0.85, 1, {});
+          this.behind.push(this.f('wyrm.head.open', Math.floor(time * 8)), cx, cy,
+            side < 0 ? { rot: Math.PI / 2 - lean, flip: true, smooth: true } : { rot: -Math.PI / 2 + lean, smooth: true });
+          this.light(h.x0, h.y0 - 20, 50, 0.5, 1, 0.3, 0.6);
         }
         break;
       }
@@ -649,7 +696,14 @@ export class GameView {
         } else {
           const y = (h.y0 + h.y1) / 2;
           if (h.kind === 'lash') {
-            for (let i = 0; i < 8; i++) this.actors.push(this.f(i === 0 ? 'wyrm.tail' : 'wyrm.body'), h.p + i * 14, y + Math.sin(time * 12 + i) * 3, { sx: 0.7, sy: 0.7, smooth: true, rot: Math.sin(time * 10 + i) * 0.2 });
+            // the tail whips across the floor tip-first; a ripple runs down it and each segment follows the wave's slope
+            const n = 13;
+            for (let i = n - 1; i >= 0; i--) {
+              const ph = time * 12 - i * 0.7;
+              const sc = 0.62 + 0.33 * (i / (n - 1));
+              this.actors.push(this.f(i === 0 ? 'wyrm.tail' : 'wyrm.body'), h.p + i * 8, y + Math.sin(ph) * 3,
+                { sx: sc, sy: sc, smooth: true, rot: Math.atan(-Math.cos(ph) * 3 * 0.7 / 8) });
+            }
           } else {
             this.glow.push(this.f('herald.sword'), h.p, y, { rot: Math.PI, smooth: true });
             this.light(h.p, y, 70, 1.4, 0.6, 0.2);

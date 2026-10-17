@@ -146,7 +146,8 @@ export class PlayScene {
       hover: (x, y, touch) => { this.hoverPt = { ...this.p.screenToWorld(x, y, this.dpr), touch }; },
       leave: () => { this.hoverPt = null; },
       press: (x, y, touch) => { this.hoverPt = { ...this.p.screenToWorld(x, y, this.dpr), touch }; },
-      tap: (x, y, touch) => this.tap(this.p.screenToWorld(x, y, this.dpr), touch),
+      act: (x, y) => this.act(this.p.screenToWorld(x, y, this.dpr)),
+      tap: (x, y, touch, sx, sy) => this.tap(this.p.screenToWorld(x, y, this.dpr), touch, this.p.screenToWorld(sx, sy, this.dpr)),
       pan: (dx, dy) => {
         this.camX += (dx * this.dpr) / this.p.scale;
         this.camY += (dy * this.dpr) / this.p.scale;
@@ -225,26 +226,44 @@ export class PlayScene {
   }
 
   private pick(wx: number, wy: number, touch: boolean): number | null {
-    const r = touch ? 14 : 8;
+    const r = touch ? 12 : 7;
     let best: number | null = null, bestScore = Infinity;
     for (const w of this.sim.d.wyrds) {
       if (!isAlive(w)) continue;
-      const dx = w.x - wx, dy = w.y - 6 - wy;
+      // distance to the sprite's body (a vertical capsule from hood to feet), with a little slack
+      // behind a walker: the click aims at where it was a moment ago
+      let dx = wx - w.x;
+      if (w.st === 'walk' && dx * w.dir < 0) dx = Math.sign(dx) * Math.max(0, Math.abs(dx) - 3);
+      const dy = wy < w.y - 13 ? wy - (w.y - 13) : wy > w.y - 2 ? wy - (w.y - 2) : 0;
       const d = Math.sqrt(dx * dx + dy * dy);
       if (d > r) continue;
       const ok = this.armed ? this.sim.canAssign(w, this.armed) : true;
-      const score = d - (ok ? 8 : 0);
+      const score = d - (ok ? 6 : 0);
       if (score < bestScore) { bestScore = score; best = w.id; }
     }
     return best;
   }
 
-  private tap(pt: { x: number; y: number }, touch: boolean): void {
+  /** Mouse press: assign straight away when it lands on a Wyrdling. */
+  private act(pt: { x: number; y: number }): boolean {
+    if (this.cfg.mode !== 'play' || this.state !== 'play') return false;
+    const id = this.pick(pt.x, pt.y, false);
+    if (id === null) return false;
+    audio.unlock();
+    this.grant(id);
+    return true;
+  }
+
+  private tap(pt: { x: number; y: number }, touch: boolean, start?: { x: number; y: number }): void {
     if (this.cfg.mode !== 'play' || this.state === 'done') return;
     audio.unlock();
     if (this.state === 'intro') this.begin();
-    const id = this.pick(pt.x, pt.y, touch);
+    const id = this.pick(pt.x, pt.y, touch) ?? (start ? this.pick(start.x, start.y, touch) : null);
     if (id === null) return;
+    this.grant(id);
+  }
+
+  private grant(id: number): void {
     if (!this.armed) {
       this.hud?.hint('Choose a calling from the bar first, then tap a Wyrdling.', 3);
       audio.sfx('ui_deny');
@@ -322,7 +341,7 @@ export class PlayScene {
         if (!prev) { this.setRewind(false); break; }
         this.sim = prev;
       }
-    } else if (this.state === 'play' && !this.paused && !this.sim.d.finished) {
+    } else if (this.state === 'play' && !this.paused && !this.debugHold && !this.sim.d.finished) {
       this.acc += dt * TICK_RATE * (this.cfg.mode === 'attract' ? 1 : this.speed);
       let steps = 0;
       while (this.acc >= 1 && steps < 12) {
@@ -432,7 +451,23 @@ export class PlayScene {
     }
   }
 
+  /** Dev tooling (scripts/frames.mjs): advance exactly n ticks with the same per-tick work as update(). */
+  debugAdvance(n: number): void {
+    for (let i = 0; i < n && !this.sim.d.finished; i++) {
+      if (this.solution) this.solution.apply(this.sim);
+      this.sim.step();
+      this.timeline.record(this.sim);
+      this.view.handleEvents(this.sim.events, this.sim);
+    }
+  }
+
+  /** Dev tooling: pin the camera (world px, top-left) or release it with null. */
+  debugCam: { x: number; y: number } | null = null;
+  /** Dev tooling: stop real-time ticking without the pause dimming. */
+  debugHold = false;
+
   render(): void {
+    if (this.debugCam) { this.camX = this.debugCam.x; this.camY = this.debugCam.y; this.clampCam(); }
     const shake = this.view.shake;
     const sx = shake ? Math.round((Math.random() - 0.5) * shake) : 0;
     const sy = shake ? Math.round((Math.random() - 0.5) * shake) : 0;

@@ -5,14 +5,17 @@ export interface InputHandlers {
   leave?(): void;
   /** press-and-hold start (touch): lets the view preview the branched fate before release */
   press?(x: number, y: number, touch: boolean): void;
-  tap?(x: number, y: number, touch: boolean): void;
+  /** mouse press: act immediately; return true if consumed (that press then never pans or taps) */
+  act?(x: number, y: number): boolean;
+  /** release without dragging; (sx, sy) is where the press started */
+  tap?(x: number, y: number, touch: boolean, sx: number, sy: number): void;
   pan?(dx: number, dy: number): void;
   panEnd?(): void;
   zoom?(dir: 1 | -1): void;
   key?(code: string, down: boolean, repeat: boolean): void;
 }
 
-interface Ptr { x: number; y: number; sx: number; sy: number; moved: boolean; touch: boolean }
+interface Ptr { x: number; y: number; sx: number; sy: number; moved: boolean; touch: boolean; used: boolean }
 
 export class Input {
   private ptrs = new Map<number, Ptr>();
@@ -68,12 +71,14 @@ export class Input {
     const [x, y] = this.local(e);
     const touch = e.pointerType !== 'mouse';
     this.el.setPointerCapture?.(e.pointerId);
-    this.ptrs.set(e.pointerId, { x, y, sx: x, sy: y, moved: false, touch });
+    this.ptrs.set(e.pointerId, { x, y, sx: x, sy: y, moved: false, touch, used: false });
     if (this.ptrs.size === 2) {
       const [a, b] = [...this.ptrs.values()];
       this.pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
       for (const p of this.ptrs.values()) p.moved = true; // two-finger gestures never tap
     } else if (e.button === 0 || touch) {
+      // mouse: a press on a Wyrdling acts at once, so a click on a moving target can't turn into a pan
+      if (!touch && this.h.act?.(x, y)) { this.ptrs.get(e.pointerId)!.used = true; return; }
       this.h.press?.(x, y, touch);
     }
   }
@@ -87,6 +92,7 @@ export class Input {
     }
     const dx = x - p.x, dy = y - p.y;
     p.x = x; p.y = y;
+    if (p.used) { this.h.hover?.(x, y, false); return; }
     if (this.ptrs.size === 2) {
       const [a, b] = [...this.ptrs.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
@@ -97,7 +103,7 @@ export class Input {
       this.h.pan?.(-dx / 2, -dy / 2);
       return;
     }
-    if (!p.moved && Math.hypot(x - p.sx, y - p.sy) > (p.touch ? 12 : 6)) p.moved = true;
+    if (!p.moved && Math.hypot(x - p.sx, y - p.sy) > (p.touch ? 16 : 6)) p.moved = true;
     if (p.moved) this.h.pan?.(-dx, -dy);
     else this.h.hover?.(x, y, p.touch);
   }
@@ -106,8 +112,8 @@ export class Input {
     const [x, y] = this.local(e);
     const p = this.ptrs.get(e.pointerId);
     this.ptrs.delete(e.pointerId);
-    if (!p) return;
-    if (!p.moved && this.ptrs.size === 0) this.h.tap?.(x, y, p.touch);
+    if (!p || p.used) return;
+    if (!p.moved && this.ptrs.size === 0) this.h.tap?.(x, y, p.touch, p.sx, p.sy);
     if (p.moved) this.h.panEnd?.();
     if (p.touch && this.ptrs.size === 0) this.h.leave?.();
   }

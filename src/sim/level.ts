@@ -15,7 +15,7 @@ interface ShapeBase {
   /** noise feature size in px (default 10) */
   grain?: number;
   seed?: number;
-  /** paint the static back wall only (no collision) */
+  /** paint the static back wall only (no collision): marks a cave interior, whatever the material */
   back?: boolean;
   /** don't add a back wall behind this solid (open-air terrain) */
   noBack?: boolean;
@@ -237,7 +237,7 @@ export function buildTerrain(def: LevelDef): Terrain {
           d += (n - 0.5) * 2 * rough;
         }
         if (d >= 0) continue;
-        if (op.back) { back[y * w + x] = mat === 0 ? 0 : 1; continue; }
+        if (op.back) { back[y * w + x] = 1; continue; }
         if (only && !only.includes(terrain.getRaw(x, y))) continue;
         terrain.set(x, y, mat);
         if (mat !== 0 && !op.noBack) back[y * w + x] = 1;

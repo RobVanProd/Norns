@@ -56,6 +56,7 @@ export class Game {
       if (q.has('go')) { this.closeModal(); this.scene?.begin(); }
     } else this.showTitle();
     requestAnimationFrame((t) => this.frame(t));
+    if (import.meta.env.DEV) (window as unknown as { __norns: unknown }).__norns = { scene: () => this.scene };
   }
 
   private resize(): void {
