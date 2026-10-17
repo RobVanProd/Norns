@@ -2,6 +2,7 @@
   "name": "norns",
   "private": true,
   "version": "0.1.0",
+  "license": "UNLICENSED",
   "type": "module",
   "description": "NORNS: Threads of Fate — a 32-bit-style creature-guiding puzzle game built on Three.js",
   "scripts": {

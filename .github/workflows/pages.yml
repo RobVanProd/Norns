@@ -1,0 +1,60 @@
+name: Pages
+# Publishes the playable game to GitHub Pages (https://robvanprod.github.io/Norns/) on every push
+# to main. One-time setup by the repo owner: Settings → Pages → Build and deployment → Source:
+# "GitHub Actions". Until then this workflow prints a notice and skips the deploy instead of failing.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.pages.outputs.enabled }}
+    steps:
+      - id: pages
+        name: Check that Pages deploys from Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          type=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pages" | jq -r .build_type || true)
+          if [ "$type" = "workflow" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=GitHub Pages is not on::Settings → Pages → Source: GitHub Actions, then re-run this workflow."
+          fi
+      - uses: actions/checkout@v4
+        if: steps.pages.outputs.enabled == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.pages.outputs.enabled == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.pages.outputs.enabled == 'true'
+        run: |
+          npm ci
+          npx vite build
+          cp docs/trailer.mp4 dist/trailer.mp4
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.pages.outputs.enabled == 'true'
+        with:
+          path: dist
+  deploy:
+    needs: build
+    if: needs.build.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
