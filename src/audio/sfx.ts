@@ -4,7 +4,7 @@
 //   boss = heavy/distorted low, magic = chimes/FM shimmer.
 
 import {
-  SR, Biquad, Rot, additive, blep, fadeEdges, ksPluck, makeAudioBuffer, mulberry32, normalize, samples, softClip,
+  SR, Biquad, OnePole, Rot, additive, blep, fadeEdges, ksPluck, makeAudioBuffer, mulberry32, normalize, samples, softClip,
   type FilterType,
 } from './dsp';
 import type { SfxId } from './types';
@@ -156,6 +156,68 @@ function boom(dur: number, seed: number, size = 1): B {
   );
 }
 
+// ---- voice: formant gibberish ----------------------------------------------------------------
+// A small creature's voice: a buzzing glottal source (band-limited saw, softened) mixed with breath
+// noise, shaped by three moving formant bandpasses. The vowels only suggest words; nothing is spoken.
+
+/** [F1, F2, F3, A1, A2, A3]: adult formant targets (Hz) and gains, scaled up by TRACT for a tiny throat */
+type Vowel = readonly [number, number, number, number, number, number];
+const VOWEL = {
+  uh: [640, 1190, 2390, 1, 0.6, 0.3],
+  o: [500, 850, 2400, 1, 0.55, 0.2],
+  u: [320, 700, 2250, 1, 0.35, 0.1],
+  i: [290, 2250, 3000, 0.8, 0.6, 0.4],
+  e: [480, 1900, 2500, 1, 0.65, 0.3],
+  ae: [680, 1700, 2450, 1, 0.65, 0.3],
+  m: [260, 1800, 2700, 1, 0.1, 0.04], // a hum through the nose: nearly all F1
+} satisfies Record<string, Vowel>;
+const TRACT = 1.3;
+const FORMANT_BW = [90, 120, 180];
+
+/** piecewise-linear curve through [t, v] points, held flat outside them */
+const curve = (pts: [number, number][]): Fn => (t) => {
+  if (t <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    const [t1, v1] = pts[i];
+    if (t <= t1) { const [t0, v0] = pts[i - 1]; return v0 + ((v1 - v0) * (t - t0)) / Math.max(1e-9, t1 - t0); }
+  }
+  return pts[pts.length - 1][1];
+};
+
+/** a glide through [t, vowel] key points */
+const vowels = (pts: [number, Vowel][]): ((t: number) => number[]) => {
+  const ch = [0, 1, 2, 3, 4, 5].map((k) => curve(pts.map(([t, v]): [number, number] => [t, v[k]])));
+  return (t) => ch.map((c) => c(t));
+};
+
+interface VoxOpts { f0: Fn; shape: (t: number) => number[]; amp: Fn; breath?: Fn; vib?: [number, number]; seed?: number }
+function vox(dur: number, o: VoxOpts): B {
+  const n = samples(dur);
+  const out = new Float32Array(n);
+  const r = mulberry32(o.seed ?? 7);
+  const tilt = new OnePole(2600);
+  const fl = [new Biquad(), new Biquad(), new Biquad()];
+  const [vr, vd] = o.vib ?? [5.5, 0.015];
+  let ph = 0, f0 = 0, amp = 0, br = 0, g = [0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    if ((i & 15) === 0) {
+      const t = i / SR;
+      f0 = o.f0(t) * (1 + vd * Math.sin(2 * Math.PI * vr * t));
+      amp = o.amp(t);
+      br = o.breath ? o.breath(t) : 0.05;
+      const s = o.shape(t);
+      for (let k = 0; k < 3; k++) fl[k].set('bp', s[k] * TRACT, s[k] / FORMANT_BW[k]);
+      g = [s[3], s[4], s[5]];
+    }
+    const dt = f0 / SR;
+    const buzz = tilt.run(2 * ph - 1 - blep(ph, dt));
+    ph += dt; if (ph >= 1) ph -= 1;
+    const x = buzz * (1 - br) + (r() * 2 - 1) * br * 1.6;
+    out[i] = (fl[0].run(x) * g[0] + fl[1].run(x) * g[1] + fl[2].run(x) * g[2]) * amp;
+  }
+  return filt(out, 'hp', 160);
+}
+
 // ---- table ----------------------------------------------------------------------------------
 export interface SfxDef {
   make: () => B;
@@ -164,6 +226,7 @@ export interface SfxDef {
   voices?: number; // max simultaneous voices of this id
   jitter?: number; // random pitch variation (fraction)
   rev?: number; // reverb send
+  bus?: 'voice'; // a Wyrdling bark: the Voices volume and the crowd limit (barks.ts) instead of the SFX bus
 }
 
 const C6 = 1046.5, E6 = 1318.5, G6 = 1568, C7 = 2093, D6 = 1174.7, A6 = 1760, D7 = 2349.3;
@@ -425,6 +488,41 @@ export const SFX: Record<SfxId, SfxDef> = {
     [filt(tone(0.9, 440, 'tri', ar(0.04, 0.5, 0.35), [5, 0.005]), 'lp', 2000), 0.32, 0.7],
     [tone(0.5, sweep(120, 80, 0.06), 'sine', ad(0.001, 0.15)), 0, 0.5],
     [pluck(587.3, 0.8, 0.8, 0.5, 78), 0.32, 0.3], [pluck(880, 0.8, 0.8, 0.5, 79), 0.36, 0.25])) },
+  // Barks, one per moment worth a word: out of the hatch, a calling taken, a fatal edge, a glide, home.
+  bark_hup: { gain: 0.28, gap: 0.05, voices: 2, bus: 'voice', make: () => fin(mix(0.26,
+    [vox(0.22, {
+      seed: 81, f0: curve([[0, 410], [0.07, 430], [0.13, 475], [0.19, 445]]),
+      shape: vowels([[0, VOWEL.uh], [0.15, VOWEL.uh], [0.19, VOWEL.u]]),
+      // breath first ('h'), then the voice, cut off by the lips ('p')
+      amp: curve([[0, 0], [0.015, 0.3], [0.05, 0.25], [0.07, 1], [0.16, 0.9], [0.185, 0]]),
+      breath: curve([[0, 1], [0.05, 0.9], [0.07, 0.08], [0.19, 0.05]]),
+    }), 0],
+    [filt(nz(0.02, { type: 'lp', f: 1800, env: ad(0.0005, 0.004), seed: 82 }), 'hp', 300), 0.2, 0.35])) },
+  bark_mm: { gain: 0.26, gap: 0.05, voices: 2, bus: 'voice', make: () => fin(vox(0.3, {
+    // "mm-hm!": a hum, a breath, a higher hum
+    seed: 83, f0: curve([[0, 330], [0.1, 320], [0.13, 360], [0.2, 450], [0.3, 425]]),
+    shape: vowels([[0, VOWEL.m], [0.3, VOWEL.m]]),
+    amp: curve([[0, 0], [0.02, 0.8], [0.09, 0.7], [0.11, 0.12], [0.135, 0.2], [0.155, 1], [0.25, 0.8], [0.3, 0]]),
+    breath: curve([[0, 0.04], [0.11, 0.04], [0.125, 0.5], [0.145, 0.04]]),
+  })) },
+  bark_oh: { gain: 0.3, gap: 0.05, voices: 2, bus: 'voice', make: () => fin(vox(0.44, {
+    // "uh-oh": up, a catch in the throat, then down
+    seed: 85, f0: curve([[0, 540], [0.1, 585], [0.13, 560], [0.16, 480], [0.42, 345]]),
+    shape: vowels([[0, VOWEL.uh], [0.12, VOWEL.uh], [0.16, VOWEL.o], [0.44, VOWEL.u]]),
+    amp: curve([[0, 0], [0.015, 1], [0.1, 0.9], [0.125, 0], [0.16, 0], [0.18, 1], [0.3, 0.7], [0.43, 0]]),
+    breath: curve([[0, 0.06], [0.3, 0.08], [0.44, 0.25]]),
+  })) },
+  bark_whee: { gain: 0.24, gap: 0.05, voices: 2, bus: 'voice', make: () => fin(vox(0.6, {
+    seed: 87, f0: curve([[0, 430], [0.12, 640], [0.35, 705], [0.6, 610]]), vib: [6, 0.03],
+    shape: vowels([[0, VOWEL.u], [0.08, VOWEL.i], [0.6, VOWEL.i]]),
+    amp: curve([[0, 0], [0.03, 0.6], [0.1, 1], [0.4, 0.75], [0.6, 0]]),
+    breath: curve([[0, 0.08], [0.4, 0.1], [0.6, 0.3]]),
+  })) },
+  bark_yay: { gain: 0.28, gap: 0.05, voices: 2, bus: 'voice', make: () => fin(vox(0.38, {
+    seed: 89, f0: curve([[0, 480], [0.1, 565], [0.22, 665], [0.38, 600]]), vib: [6, 0.02],
+    shape: vowels([[0, VOWEL.i], [0.05, VOWEL.i], [0.12, VOWEL.ae], [0.25, VOWEL.e], [0.38, VOWEL.i]]),
+    amp: curve([[0, 0], [0.02, 0.7], [0.08, 1], [0.28, 0.85], [0.38, 0]]),
+  })) },
 };
 
 // ---- cache ----------------------------------------------------------------------------------

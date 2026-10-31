@@ -40,7 +40,7 @@ export interface SaveData {
   hoods: string[];
   /** Ids of every level ever opened. Unlocks stick, so a level added to a realm later never relocks one. */
   opened: string[];
-  settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean; verdict: boolean };
+  settings: { music: number; sfx: number; voice: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean; verdict: boolean };
   seenIntro: boolean;
   /** best run per level id ("Watch your best") */
   weaves: Record<string, BestWeave>;
@@ -66,7 +66,7 @@ function legacyOpened(stars: Record<string, number>): string[] {
 function fresh(): SaveData {
   const s: SaveData = {
     v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
-    settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false, verdict: true }, seenIntro: false,
+    settings: { music: 0.7, sfx: 0.85, voice: 0.7, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false, verdict: true }, seenIntro: false,
     weaves: {}, seen: [], visionTier: {},
   };
   refreshOpened(s);

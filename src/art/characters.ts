@@ -1013,6 +1013,216 @@ function frozen(): Px[] {
   return [out];
 }
 
+// --- Personality: fidgets, cowering, flailing, cheering, comic fates ---------------------------
+
+/** waiting: 0 stand, 1 blink, 2 look up, 3-4 tap a foot, 5 scratch the hood, 6 stretch (the view sequences them) */
+function idle(): Px[] {
+  const stand: Pose = {
+    bf: { sx: 11, sy: 11, hx: 12, hy: 13 }, bb: { sx: 6, sy: 11, hx: 4, hy: 13 }, ff: [10, 15], fb: [6, 15], tipS: 'mid',
+    thread: { amp: 0.5, grav: 1.4 },
+  };
+  return [
+    pose(stand),
+    pose({ ...stand, eyes: 'blink' }),
+    pose({ ...stand, eyes: 'up', tipS: 'high' }),
+    pose({ ...stand, ff: [11, 14] }),
+    pose({ ...stand, ff: [11, 15], thread: { amp: 0.5, grav: 1.4, phase: 1 } }),
+    pose({ ...stand, eyes: 'squint', tipS: 'low', bf: { sx: 11, sy: 11, hx: 12, hy: 6 } }),
+    pose({
+      ...stand, eyes: 'shut', head: [3, 4], tipS: 'up', body: { top: 10 },
+      bf: { sx: 11, sy: 10, hx: 13, hy: 5 }, bb: { sx: 6, sy: 10, hx: 3, hy: 5 },
+    }),
+  ];
+}
+
+/** foreseen to die within a second: hunched, paws to the face, trembling, a bead of sweat */
+function cower(): Px[] {
+  return range(4).map((f) => pose({
+    o: [f % 2, 0],
+    head: [3, 7], eyes: f < 2 ? 'shut' : 'wide', tipS: 'down',
+    body: { top: 12, wt: 8, wb: 10, cx: 8 },
+    bf: { sx: 10, sy: 12, hx: 11, hy: 11 }, bb: { sx: 6, sy: 12, hx: 4, hy: 12 },
+    ff: [[10, 15], [9, 15], [10, 15], [11, 15]][f] as [number, number], fb: [[5, 15], [6, 15], [5, 15], [4, 15]][f] as [number, number],
+    thread: { ay: 13, grav: 1.8, amp: 0.3, phase: f },
+    fx: (r) => { r.fset(13, 6 + (f >> 1), ICE[5]); r.fset(13, 7 + (f >> 1), ICE[3]); },
+  }));
+}
+
+/** the first moments of a fatal fall: arms windmilling, eyes and mouth wide */
+function flail(): Px[] {
+  const fa: [number, number][] = [[13, 7], [14, 10], [12, 12], [11, 8]];
+  const ba: [number, number][] = [[3, 11], [2, 8], [4, 6], [5, 9]];
+  return range(4).map((f) => pose({
+    eyes: 'wide', tipS: f % 2 ? 'up' : 'up2',
+    bf: { sx: 11, sy: 11, hx: fa[f][0], hy: fa[f][1] }, bb: { sx: 6, sy: 11, hx: ba[f][0], hy: ba[f][1] },
+    ff: [[11, 14], [10, 15], [11, 15], [12, 14]][f] as [number, number], fb: [[5, 15], [4, 14], [5, 14], [6, 15]][f] as [number, number],
+    body: { hem: [0, -1, 0, 1][f] },
+    thread: { ang: 130, grav: -1.2, phase: (f * Math.PI) / 2, amp: 1.2, spark: f },
+  }));
+}
+
+/** home: crouch, a jump with both arms up, the peak, the landing (the view adds the hop) */
+function cheer(): Px[] {
+  const glowT: ThreadOpt = { glow: true, ang: 150, grav: -1, phase: 1 };
+  return [
+    pose({
+      head: [3, 7], eyes: 'happy', tip: [205, 0.5], body: { top: 12, wt: 7, wb: 10, cx: 8 }, ff: [10, 15], fb: [4, 15],
+      bf: { sx: 10, sy: 12, hx: 12, hy: 14 }, bb: { sx: 6, sy: 12, hx: 3, hy: 14 }, thread: { ay: 13, grav: 1.8, amp: 0.4 },
+    }),
+    pose({
+      eyes: 'happy', head: [3, 4], tipS: 'up', body: { top: 10 }, ff: [10, 14], fb: [5, 14],
+      bf: { sx: 11, sy: 10, hx: 13, hy: 6 }, bb: { sx: 6, sy: 10, hx: 3, hy: 6 }, thread: glowT,
+    }),
+    pose({
+      eyes: 'happy', head: [3, 4], tipS: 'up2', body: { top: 10, hem: 1 }, ff: [11, 14], fb: [4, 14],
+      bf: { sx: 11, sy: 10, hx: 14, hy: 5 }, bb: { sx: 6, sy: 10, hx: 2, hy: 5 }, thread: glowT,
+      fx: (r) => { sparkle(r.fx, 14, 2, GOLD[5], GOLD[3]); sparkle(r.fx, 2, 2, GOLD[5], GOLD[3]); },
+    }),
+    pose({
+      eyes: 'happy', tipS: 'high', ff: [10, 15], fb: [5, 15],
+      bf: { sx: 11, sy: 11, hx: 13, hy: 8 }, bb: { sx: 6, sy: 11, hx: 3, hy: 8 }, thread: { ...glowT, phase: 2 },
+    }),
+  ];
+}
+
+const FLAT_KEY: Key = {
+  '1': HOOD[1], '2': HOOD[2], '3': HOOD[3], '4': HOOD[4], '5': HOOD[5], k: CAVITY, f: FACE[2], g: FACE[3], e: EYE,
+  l: CLOAK[1], c: CLOAK[2], d: CLOAK[3], b: BOOT[1],
+};
+
+/** crushed flat as a pancake (bloodless): hood, a strip of face with two dot eyes, cloak, boots out sideways */
+function flat(): Px[] {
+  const rows = [
+    [
+      '....34455543....',
+      '.1234333kgegeg..',
+      '..lcddddddddcl..',
+      '.bb.lcccccccl.bb',
+    ],
+    [
+      '.1..............',
+      '..2.3445554.....',
+      '...34333kgegegg.',
+      '.lccddddddddcl..',
+      'bb.lcccccccccl.b',
+    ],
+  ];
+  return rows.map((r) => {
+    const p = new Px(S, S);
+    stamp(p, r, FLAT_KEY, 0, S - r.length);
+    selout(p);
+    return p;
+  });
+}
+
+/** an empty hood afloat (anchor on the waterline), its point drooping a little more in frame 1 */
+function floatingHood(): Px[] {
+  const rows = [
+    [
+      '.....34554......',
+      '..234345555.....',
+      '.12..3444443....',
+      '.....2kkkk3.....',
+    ],
+    [
+      '.....34554......',
+      '...2334555......',
+      '.2340344444.....',
+      '.1...2kkkk3.....',
+    ],
+  ];
+  return rows.map((r) => {
+    const p = new Px(S, S);
+    stamp(p, r, HEAD_KEY, 0, S - r.length);
+    selout(p);
+    return p;
+  });
+}
+
+/** a puff of soot with two eyes: 0 open, 1 blink, 2-3 thinning away (eyes last) */
+function soot(): Px[] {
+  const W = 14, H = 13;
+  const blobs: [number, number, number][] = [[7, 8, 4.6], [4, 9, 3.2], [10.2, 9, 3.2], [6.5, 5, 3], [9, 4.6, 2.2]];
+  const inside = (x: number, y: number) => blobs.some(([cx, cy, r]) => (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 <= r * r);
+  return range(4).map((f) => {
+    const p = new Px(W, H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (!inside(x, y)) continue;
+      // thinning: outer and random pixels go first
+      const edge = !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1);
+      const h = hash2(x, y, 31);
+      if (f === 2 && (edge || h < 0.3)) continue;
+      if (f === 3 && h < 0.72) continue;
+      const l = -((x + 0.5 - 7) * 0.6 + (y + 0.5 - 7) * 0.8) / 5;
+      p.set(x, y, ASH[clamp(Math.round(2 + l * 1.4 + (h > 0.85 ? 1 : 0)), 1, 4)]);
+    }
+    if (f < 2) p.outline(ASH[0]);
+    // a curl of smoke on top
+    if (f < 3) for (const [x, y] of [[8, 0], [9, 1], [8, 2]] as const) if (!aOf(p.get(x, y))) p.set(x, y, ASH[3]);
+    // eyes: whites with pupils looking down-forward, or a blink
+    for (const ex of [4, 8]) {
+      if (f === 1) { p.set(ex, 7, ASH[4]); p.set(ex + 1, 7, ASH[4]); continue; }
+      p.set(ex, 6, GLINT); p.set(ex + 1, 6, GLINT); p.set(ex, 7, GLINT); p.set(ex + 1, 7, EYE);
+    }
+    return p;
+  });
+}
+
+/** a little burst of gold: a dot, a ring, a scatter (anchor centre) */
+function pop(): Px[] {
+  return range(3).map((k) => {
+    const p = new Px(11, 11);
+    const r = [1.5, 3.5, 5][k];
+    for (let i = 0; i < 12; i++) {
+      if (k === 2 && i % 2) continue;
+      const a = (i / 12) * Math.PI * 2;
+      p.set(Math.round(5 + Math.cos(a) * r), Math.round(5 + Math.sin(a) * r), i % 2 ? GOLD[4] : GOLD[5]);
+    }
+    if (k === 0) p.rect(4, 4, 3, 3, GOLD[5]);
+    return p;
+  });
+}
+
+/** the loose thread a Wyrdling becomes, wriggling upward (anchor its lower end) */
+function looseThread(): Px[] {
+  return range(4).map((f) => {
+    const p = new Px(7, 16);
+    for (let y = 1; y < 16; y++) {
+      const t = 1 - y / 15;
+      const x = Math.round(3 + Math.sin(y * 0.75 + (f * Math.PI) / 2) * (0.6 + 1.4 * t));
+      p.set(x, y, (y + f) % 5 === 0 ? GOLD[5] : y < 4 ? GOLD[2] : GOLD[4]);
+    }
+    return p;
+  });
+}
+
+/** speech bubbles: the visible half of every bark, so a muted or deaf player still hears them */
+function bubble(icon: string[], col: Color): Px {
+  const p = new Px(13, 11);
+  stamp(p, [
+    '.............',
+    '..wwwwwwwww..',
+    '.wwwwwwwwwww.',
+    '.wwwwwwwwwww.',
+    '.wwwwwwwwwww.',
+    '.wwwwwwwwwww.',
+    '.wwwwwwwwwww.',
+    '..wwwwwwwww..',
+    '..ww.........',
+    '..w..........',
+  ], { w: FACE[4] }, 0, 0);
+  p.outline(EYE);
+  stamp(p, icon, { a: col }, 4, 2);
+  return p;
+}
+
+const EMOTES: Record<string, [string[], Color]> = {
+  hup: [['..a..', '.aaa.', 'aaaaa', '..a..', '..a..'], GOLD[1]],
+  oh: [['..a..', '..a..', '..a..', '.....', '..a..'], RUNE[2]],
+  whee: [['.....', '.a...', 'a.a.a', '...a.', '.....'], WATER[2]],
+  yay: [['.a.a.', 'aaaaa', 'aaaaa', '.aaa.', '..a..'], BLUSH],
+};
+
 // --- Marks (7×7, anchor (3,6)) ----------------------------------------------------------------
 
 function markClimber(): Px {
@@ -1073,6 +1283,16 @@ export function buildCharacterSprites(): SpriteLib {
     'wyrd.burn': anim(burn()),
     'wyrd.drown': anim(drown()),
     'wyrd.frozen': anim(frozen()),
+    'wyrd.idle': anim(idle()),
+    'wyrd.cower': anim(cower()),
+    'wyrd.flail': anim(flail()),
+    'wyrd.cheer': anim(cheer()),
+    'wyrd.flat': anim(flat()),
+    'wyrd.hood': anim(floatingHood()),
+    'fx.soot': anim(soot(), 7, 12),
+    'fx.pop': anim(pop(), 5, 5),
+    'fx.thread': anim(looseThread(), 3, 15),
+    ...Object.fromEntries(Object.entries(EMOTES).map(([k, [icon, col]]) => [`emote.${k}`, { frames: [bubble(icon, col).toCanvas()], ax: 2, ay: 10 }])),
     'mark.climber': { frames: [markClimber().toCanvas()], ax: 3, ay: 6 },
     'mark.glider': { frames: [markGlider().toCanvas()], ax: 3, ay: 6 },
   };

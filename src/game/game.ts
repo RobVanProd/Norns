@@ -52,7 +52,7 @@ export class Game {
     this.stats = loadStats();
     setHood(this.save.hood);
     p.zoomOffset = this.save.settings.zoom;
-    audio.setVolumes({ music: this.save.settings.music, sfx: this.save.settings.sfx });
+    audio.setVolumes({ music: this.save.settings.music, sfx: this.save.settings.sfx, voice: this.save.settings.voice });
     this.screenEl = el('div', { class: 'screen' });
     this.captionEl = el('div', { class: 'caption' });
     ui.append(this.screenEl, this.captionEl);
@@ -649,6 +649,8 @@ export class Game {
         el('div', {},
           slider('Music', s.music, (v) => { s.music = v; audio.setVolumes({ music: v }); }),
           slider('Sound', s.sfx, (v) => { s.sfx = v; audio.setVolumes({ sfx: v }); audio.sfx('ui_click'); }),
+          // the Wyrdlings' barks, apart from the other sounds: the first thing to turn down if they grate
+          slider('Voices', s.voice, (v) => { s.voice = v; audio.setVolumes({ voice: v }); audio.sfx('bark_yay'); }),
           toggle('Tutorial hints', s.hints, (v) => { s.hints = v; if (this.scene) this.scene.cfg.hints = v; },
             'Level tips, and a word the first time something new happens'),
           el('label', { class: 'set' }, el('span', { text: 'Pixel zoom' }), zoom),
