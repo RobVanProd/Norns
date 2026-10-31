@@ -12,9 +12,10 @@ import { clear, el, pixelCanvas } from '../ui/dom';
 import { bindKey, defaultKeys, KEY_ACTIONS, keyName, keysName, reservedKey, type KeyAction, type KeyBinds } from './input';
 import { PlayScene, type PlayMode, type PlayResult } from './play';
 import {
-  BOSS_NEEDS, HOODS, TEXT_SIZES, TOUCH_REACH, UPGRADES, bestWeave, isUnlocked, loadSave, markSeen, offerWeave, realmUnlocked, recordOutcome, starCount,
-  totalStars, writeSave, type SaveData,
+  BOSS_NEEDS, HOODS, RECORD_KEYS, TEXT_SIZES, TOUCH_REACH, UPGRADES, bestWeave, isUnlocked, levelRecords, loadSave, markSeen, offerRecords,
+  offerWeave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave, type LevelRecords, type RecordKey, type SaveData,
 } from './save';
+import { fmtTicks, gameUrl, histogram, readShared, resultText, shareUrl, skuldPar, weaveFromHash, type RunFacts } from './share';
 import { eraseStats, levelStats, loadStats, logFinish, logQuit, playtestReport, writeStats, type QuitPoint, type Stats } from './stats';
 import { setHood, setPalette, type PaletteId } from './view';
 import { VISION_TIERS, type VisionTier } from './vision';
@@ -51,6 +52,8 @@ export class Game {
   private dpr = Math.min(window.devicePixelRatio || 1, 3);
   /** the realm-unsealed stinger waiting for the victory one to finish */
   private unlockTimer = 0;
+  /** the Weave the last shared link brought, while it is the one being watched */
+  private shared: Weave | null = null;
 
   constructor(p: Pipeline, art: ArtBundle, ui: HTMLElement) {
     this.p = p;
@@ -79,7 +82,14 @@ export class Game {
     this.resize();
     const q = new URLSearchParams(location.search);
     const direct = ALL_LEVELS.find((l) => l.id === (q.get('level') ?? q.get('vision')));
-    if (direct) {
+    // a shared replay link (#weave=…), also when one is pasted into the address bar of an open game
+    const link = weaveFromHash(location.hash);
+    window.addEventListener('hashchange', () => {
+      const t = weaveFromHash(location.hash);
+      if (t !== null) this.openShared(t);
+    });
+    if (link !== null) this.openShared(link);
+    else if (direct) {
       // dev tooling (see AGENTS.md): &vision watches Skuld's Vision of the whole quota route, &tier=1-4 one
       // stage of it, &solution plays the whole scripted solution (spindle steps too) as an attempt
       const dev = import.meta.env.DEV;
@@ -167,7 +177,9 @@ export class Game {
       this.scene.update(dt);
       this.scene.render();
       this.scene.tickCaption(dt);
-      const cap = this.scene.caption;
+      let cap = this.scene.caption;
+      // a replayed calling is captioned as the player's own; a shared Weave's callings are someone else's
+      if (cap && this.shared && this.scene.cfg.replay === this.shared) cap = cap.replace(/^You grant/, 'They grant');
       this.captionEl.textContent = cap ?? '';
       this.captionEl.classList.toggle('show', !!cap);
     }
@@ -212,7 +224,7 @@ export class Game {
     const scene = new PlayScene(this.p, this.art, {
       level, mode, replay, visionTier,
       horizonSec: UPGRADES.foresight.levels[this.save.upgrades.foresight],
-      foresight: s.foresight, hints: s.hints, rewindToggle: s.rewindToggle, verdict: s.verdict,
+      foresight: s.foresight, hints: s.hints, rewindToggle: s.rewindToggle, verdict: s.verdict, clearSight: s.clearSight,
       keys: s.keys, reduceMotion: s.reduceMotion, touchReach: clampReach(s.touchReach),
     }, {
       finished: (r) => this.results(r),
@@ -260,7 +272,7 @@ export class Game {
   private keysLine(): string {
     const k = this.save.settings.keys;
     return `Mouse, touch or keyboard · ${firstKey(k, 'slot1')}–${firstKey(k, 'slot9')} callings · ${firstKey(k, 'pause')} pause`
-      + ` · ${firstKey(k, 'rewind')} rewind · ${firstKey(k, 'foresight')} foresight`;
+      + ` · ${firstKey(k, 'rewind')} rewind · ${firstKey(k, 'foresight')} foresight · hold C clear sight`;
   }
 
   /** The story, on one card. The very first launch goes from it straight into the first level; the map
@@ -275,6 +287,53 @@ export class Game {
       el('p', { class: 'story-text', text: 'At the roots of Yggdrasil, three Norns weave all fate. From their Loom tumble the Wyrdlings: '
         + 'small hooded spirits who wander blind. Grant them callings, peer ahead along their threads, and unspool time when fate goes wrong.' }),
       el('div', { class: 'row' }, go, skip)));
+  }
+
+  // ------------------------------------------------------------------ shared links
+
+  /**
+   * A shared link (#weave=…). The Weave is replayed headless before anything is shown: one that replays
+   * true is offered to watch, with a warning that it shows a whole solution; one from another version of
+   * the game or of its level, or one that goes out of step, is marked and never replayed. Watching does
+   * not need the level open; playing it does.
+   */
+  private openShared(text: string): void {
+    // the link is spent: a reload, or the address copied from the bar, starts from the plain game
+    history.replaceState(null, '', location.pathname + location.search);
+    const sh = readShared(text, ALL_LEVELS);
+    this.showTitle();
+    const level = sh.kind === 'bad' ? null : sh.level;
+    const title = el('button', { class: 'btn', text: 'To the title' });
+    title.addEventListener('click', () => { audio.sfx('ui_back'); this.closeModal(); });
+    const buttons: HTMLButtonElement[] = [];
+    if (sh.kind === 'ok') {
+      const watch = el('button', { class: 'btn gold', text: 'Watch it' });
+      watch.addEventListener('click', () => { audio.sfx('ui_click'); this.shared = sh.w; this.playLevel(sh.level, 'vision', sh.w); });
+      buttons.push(watch);
+    }
+    if (level && isUnlocked(this.save, level.id)) {
+      const play = el('button', { class: `btn${sh.kind === 'ok' ? '' : ' gold'}`, text: sh.kind === 'ok' ? 'Play it first' : 'Play this level' });
+      play.addEventListener('click', () => { audio.sfx('ui_click'); this.playLevel(level); });
+      buttons.push(play);
+    }
+    buttons.push(title);
+    let says: string;
+    if (sh.kind === 'ok') {
+      const f = sh.facts;
+      says = `It saves ${f.saved} of ${sh.level.wyrdlings} with ${f.used} calling${f.used === 1 ? '' : 's'}`
+        + `${f.bossDefeated ? ' and fells the guardian' : ''}${f.spindle ? ', and finds the Golden Spindle' : ''}.`;
+    } else if (sh.kind === 'bad') says = 'This link holds no weave that NORNS can read.';
+    else if (sh.kind === 'step') says = 'It goes out of step when replayed here (the link may be damaged), so it is not replayed.';
+    else if (sh.why === 'version') says = 'It was woven on another version of NORNS, whose rules may differ, so it is not replayed.';
+    else says = level ? 'It was woven on another version of this level, so it is not replayed.' : 'It was woven on a level this version of NORNS does not have.';
+    const badge = sh.kind === 'old' ? 'Old version' : sh.kind === 'step' ? 'Out of step' : null;
+    this.openModal(el('div', { class: 'panel modal shared' },
+      el('div', { class: 'kicker', text: 'A shared weave' }),
+      el('h2', { text: level?.name ?? (sh.kind === 'bad' ? 'Not a weave' : 'An unknown thread') }),
+      badge ? el('div', { class: 'badge', text: badge }) : null,
+      el('p', { class: 'flavor', text: says }),
+      sh.kind === 'ok' ? el('p', { class: 'warn', text: 'Watching it shows the whole solution, calling by calling.' }) : null,
+      el('div', { class: 'row' }, ...buttons)));
   }
 
   // ------------------------------------------------------------------ map
@@ -343,9 +402,10 @@ export class Game {
     audio.setIntensity(0);
     if (mode === 'vision') {
       const stop = el('button', { class: 'btn small vision-stop', text: replay ? 'Stop' : 'End Vision' });
-      stop.addEventListener('click', () => { audio.sfx('ui_back'); this.playLevel(level); });
+      stop.addEventListener('click', () => { audio.sfx('ui_back'); this.afterReplay(level, replay); });
       const banner = el('div', { class: 'vision-banner' });
-      if (replay || !tier) banner.append(el('span', { text: 'Your best weave, woven again' }));
+      if (replay && replay === this.shared) banner.append(el('span', { text: 'A shared weave, woven again' }));
+      else if (replay || !tier) banner.append(el('span', { text: 'Your best weave, woven again' }));
       else {
         banner.append(el('span', { text: "Skuld's Vision" }), el('span', { class: 'vtier', text: `${tier}/4 ${VISION_TIERS[tier]}` }));
         if (tier < 4) {
@@ -365,6 +425,12 @@ export class Game {
   /** The tier a level's Vision opens at: the furthest one already watched. */
   private visionTier(level: LevelDef): VisionTier {
     return Math.max(1, Math.min(4, this.save.visionTier[level.id] ?? 1)) as VisionTier;
+  }
+
+  /** Leaving a replay goes into the level, unless a shared link brought it and the level is not open yet. */
+  private afterReplay(level: LevelDef, replay?: Weave): void {
+    if (replay && replay === this.shared && !isUnlocked(this.save, level.id)) this.showTitle();
+    else this.playLevel(level);
   }
 
   private introCard(level: LevelDef, scene: PlayScene): void {
@@ -401,6 +467,7 @@ export class Game {
       this.screenEl.append(go);
     });
     const mask = this.save.stars[level.id] ?? 0;
+    const records = levelRecords(this.save, level);
     // the player's best run, if it still replays on this version of the level
     const best = bestWeave(this.save, level);
     let watch: HTMLButtonElement | null = null;
@@ -420,6 +487,8 @@ export class Game {
           ? el('div', { class: `goal${mask & 4 ? ' got' : ''}` }, pixelCanvas(this.art.icons[mask & 4 ? 'star' : 'star_empty'], 2, 'px icon'), el('span', { text: 'Find the Golden Spindle' }))
           : null,
       ),
+      // once cleared: the player's records against Skuld's par (before that, the level speaks for itself)
+      records ? this.recordsTable(level, records, null) : null,
       skills, desc,
       el('div', { class: 'row' }, look, watch, begin),
     ));
@@ -430,11 +499,14 @@ export class Game {
     if (!level || !this.scene) return;
     if (this.scene.cfg.mode === 'vision') {
       const own = this.scene.cfg.replay;
+      const shared = !!own && own === this.shared;
       const tier = this.scene.cfg.visionTier ?? 4;
       const text = own
-        ? `Your weave saved ${r.saved} of ${level.wyrdlings} with ${r.skillsUsed} calling${r.skillsUsed === 1 ? '' : 's'}${this.scene.replayDesync ? ', but it went out of step with the recording' : ''}.`
+        ? `${shared ? 'This' : 'Your'} weave saved ${r.saved} of ${level.wyrdlings} with ${r.skillsUsed} calling${r.skillsUsed === 1 ? '' : 's'}${this.scene.replayDesync ? ', but it went out of step with the recording' : ''}.`
         : tier < 4 ? VISION_FADES[tier as 1 | 2 | 3] : `Skuld's path saved ${r.saved} of ${level.wyrdlings}. Now weave it yourself.`;
-      const buttons: [string, () => void, boolean?][] = [[own ? 'Play' : 'Try it', () => this.playLevel(level), true]];
+      // a shared Weave can be watched on a level not yet open; playing it waits for the level to open
+      const playable = !shared || isUnlocked(this.save, level.id);
+      const buttons: [string, () => void, boolean?][] = [playable ? [own ? 'Play' : 'Try it', () => this.playLevel(level), true] : ['To the title', () => this.showTitle(), true]];
       if (!own && tier < 4) buttons.push(['Show more', () => this.playLevel(level, 'vision', undefined, (tier + 1) as VisionTier)]);
       buttons.push(['Watch again', () => this.playLevel(level, 'vision', own, own ? undefined : tier)], ['Map', () => this.showMap()]);
       this.openModal(el('div', { class: 'panel modal results' }, el('h2', { text: own ? 'Woven again' : 'The Vision fades' }),
@@ -445,8 +517,11 @@ export class Game {
     const out = recordOutcome(this.save, {
       levelId: level.id, saved: r.saved, quota: level.quota, target: level.target, spindle: r.spindle, bossDefeated: r.bossDefeated,
     });
-    // recordOutcome wrote the save; a new best run is written with it
-    if (r.weave && offerWeave(this.save, level, r.weave, r)) writeSave(this.save);
+    // records (and the best run to watch) come only from the Weave replayed headless to this very result
+    const claimed: RunFacts = { saved: r.saved, used: r.skillsUsed, ticks: r.ticks, spindle: r.spindle, bossDefeated: r.bossDefeated };
+    const rec = r.weave ? offerRecords(this.save, level, r.weave, claimed) : { facts: null, set: [] };
+    if (r.weave && rec.facts) offerWeave(this.save, level, r.weave, rec.facts);
+    writeSave(this.save);
     const l = levelStats(this.stats, level.id);
     if (!this.attemptCounted) l.attempts++;
     this.attemptCounted = true;
@@ -482,12 +557,8 @@ export class Game {
     buttons.push(['Retry', () => this.playLevel(level)]);
     if (!won) buttons.push(["Skuld's Vision", () => this.playLevel(level, 'vision')]);
     if (!mapFirst) buttons.push(['Map', () => this.showMap()]);
-    const lines = [
-      el('div', { class: 'stat' }, el('span', { text: 'Saved' }), el('b', { text: `${r.saved} / ${level.wyrdlings}` })),
-      el('div', { class: 'stat' }, el('span', { text: 'Needed' }), el('b', { text: `${level.quota}` })),
-      el('div', { class: 'stat' }, el('span', { text: 'Callings used' }), el('b', { text: `${r.skillsUsed}` })),
-      el('div', { class: 'stat' }, el('span', { text: 'Time' }), el('b', { text: fmtTime(r.ticks) })),
-    ];
+    // saved, callings and time sit in the records table, against the player's records and Skuld's par
+    const lines = [el('div', { class: 'stat' }, el('span', { text: 'Needed' }), el('b', { text: `${level.quota}` }))];
     if (r.rewinds) lines.push(el('div', { class: 'stat' }, el('span', { text: 'Rewinds' }), el('b', { text: `${r.rewinds} (free!)` })));
     if (out.threads) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Threads earned' }), el('b', { text: `+${out.threads}` })));
     for (const r of unsealed) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Realm unsealed' }), el('b', { class: 'name', text: r.name })));
@@ -499,14 +570,73 @@ export class Game {
     for (const t of missedStars(level, r, out.mask)) {
       missed.append(el('div', { class: 'goal' }, pixelCanvas(this.art.icons.star_empty, 2, 'px icon'), el('span', { text: t })));
     }
+    // sharing: a spoiler-free result for anyone, and the replay itself for those who want to watch it
+    const base = gameUrl(location);
+    const box = el('textarea', { class: 'copy-box', readonly: true, 'aria-label': 'Text to copy' });
+    const copyResult = el('button', { class: 'btn small', text: 'Copy result' });
+    copyResult.addEventListener('click', () => { audio.sfx('ui_click'); copyOut(resultText(level, { saved: r.saved, used: r.skillsUsed }, out.mask, base), copyResult, box); });
+    const share = el('div', { class: 'row share' }, copyResult);
+    // only a run that replays true is worth a link
+    if (r.weave && rec.facts) {
+      const w = r.weave;
+      const copyLink = el('button', { class: 'btn small', text: 'Copy replay link' });
+      copyLink.addEventListener('click', () => { audio.sfx('ui_click'); copyOut(shareUrl(base, w), copyLink, box); });
+      share.append(copyLink);
+    }
     this.openModal(el('div', { class: `panel modal results ${won ? 'won' : 'lost'}` },
       el('h2', { text: won ? (level === ALL_LEVELS[ALL_LEVELS.length - 1] ? 'The Threads Are Whole!' : level.boss ? 'The Guardian Falls!' : 'Threads Rewoven!') : 'Fate Unravelled' }),
       won && level === ALL_LEVELS[ALL_LEVELS.length - 1] ? el('p', { class: 'flavor', text: 'Surtr\u2019s fire gutters out. The Wyrdlings are home, and the Norns weave on.' }) : null,
       stars,
       missed.childElementCount ? missed : null,
+      this.recordsTable(level, levelRecords(this.save, level), { facts: rec.facts ?? claimed, set: rec.set, verified: !!rec.facts }),
       el('div', { class: 'stats' }, ...lines),
       won ? null : el('p', { class: 'flavor', text: 'No harm done. Rewind to where it went wrong, or watch Skuld’s Vision for one path that works.' }),
-      this.row(buttons)));
+      this.row(buttons), share, box));
+  }
+
+  /**
+   * Saved, callings and time: this run (if any), the player's records, Skuld's par (what the scripted
+   * solution does), and under them a small histogram of the player's own past clears with this run (gold)
+   * and the par (teal) marked. A record this run set is flagged where it stands.
+   */
+  private recordsTable(level: LevelDef, rec: LevelRecords | null, run: { facts: RunFacts; set: RecordKey[]; verified: boolean } | null): HTMLElement {
+    const par = skuldPar(level);
+    const fmt = (k: RecordKey, v: number) => (k === 'ticks' ? fmtTicks(v) : String(v));
+    const t = el('div', { class: 'records' }, el('span', { class: 'rh' }),
+      el('span', { class: 'rh', text: 'Saved' }), el('span', { class: 'rh', text: 'Callings' }), el('span', { class: 'rh', text: 'Time' }));
+    const row = (label: string, cls: string, cells: HTMLElement[]) => t.append(el('span', { class: `rl ${cls}`, text: label }), ...cells);
+    // each count also carries its unit, shown where short screens drop the header row
+    const cell = (cls: string, k: RecordKey, n: number, tag: HTMLElement | null = null) => el('b', { class: cls },
+      k === 'saved' && cls === 'now' ? `${n}/${level.wyrdlings}` : fmt(k, n),
+      k === 'ticks' ? null : el('span', { class: 'unit', text: k === 'saved' ? ' saved' : n === 1 ? ' calling' : ' callings' }), tag);
+    if (run) {
+      const f = run.facts;
+      row('This run', 'now', RECORD_KEYS.map((k) => cell('now', k, f[k], run.set.includes(k) ? el('i', { class: 'new', text: 'best' }) : null)));
+    }
+    // the records row says something only where the best is not this very run
+    if (rec && !(run && run.set.length === RECORD_KEYS.length)) row('Your best', 'best', RECORD_KEYS.map((k) => cell('best', k, rec[k][k])));
+    row("Skuld's par", 'par', RECORD_KEYS.map((k) => cell('par', k, par[k])));
+    if (rec && run && rec.runs.length > 1) {
+      // this run is marked only if it is one of the clears
+      const now = run.verified && run.facts.saved >= level.quota && run.facts.bossDefeated !== false ? run.facts : null;
+      row(`Your ${rec.runs.length} clears`, 'hist-l', RECORD_KEYS.map((k, i) => this.histogramEl(rec.runs.map((x) => x[i]), now ? now[k] : null, par[k])));
+    }
+    if (run && !run.verified) t.append(el('p', { class: 'unverified', text: 'This run did not replay true, so it sets no records.' }));
+    return t;
+  }
+
+  /** A tiny bar chart of the player's past clears: the bin this run falls in gold, the one Skuld's par falls in underlined teal. */
+  private histogramEl(values: number[], now: number | null, par: number): HTMLElement {
+    const all = [...values, par, ...(now === null ? [] : [now])];
+    const { counts, bin } = histogram(values, Math.min(...all), Math.max(...all), 8);
+    const top = Math.max(...counts);
+    const box = el('span', { class: 'hist' });
+    counts.forEach((c, i) => {
+      const b = el('i', { class: `${now !== null && bin(now) === i ? 'now' : ''}${bin(par) === i ? ' par' : ''}` });
+      b.style.height = `${c ? 3 + Math.round((c / top) * 13) : 1}px`;
+      box.append(b);
+    });
+    return box;
   }
 
   private row(btns: [string, () => void, boolean?][]): HTMLElement {
@@ -692,21 +822,14 @@ export class Game {
     });
     // the playtest log leaves the device only this way: copied, by the player, to paste where they like
     const copy = el('button', { class: 'btn', text: 'Copy playtest report' });
-    const copied = el('textarea', { class: 'report', readonly: true, 'aria-label': 'Playtest report' });
+    const copied = el('textarea', { class: 'copy-box', readonly: true, 'aria-label': 'Playtest report' });
     copy.addEventListener('click', () => {
       audio.sfx('ui_click');
       const scene = this.scene;
       if (scene?.log) scene.log.foldInto(levelStats(this.stats, scene.cfg.level.id));
       writeStats(this.stats);
-      const text = playtestReport(this.stats, ALL_LEVELS, this.save.stars,
-        { w: window.innerWidth, h: window.innerHeight, touch: matchMedia('(any-pointer: coarse)').matches });
-      const show = (msg: string) => {
-        copy.textContent = msg;
-        // no clipboard (an insecure page, a refusal): show the text to copy by hand
-        if (msg !== 'Copied') { copied.value = text; copied.style.display = 'block'; copied.select(); }
-      };
-      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => show('Copied'), () => show('Select and copy below'));
-      else show('Select and copy below');
+      copyOut(playtestReport(this.stats, ALL_LEVELS, this.save.stars,
+        { w: window.innerWidth, h: window.innerHeight, touch: matchMedia('(any-pointer: coarse)').matches }), copy, copied);
     });
     // two columns side by side on short (landscape phone) screens, one under the other elsewhere
     this.openModal(el('div', { class: 'panel modal settings' },
@@ -727,6 +850,8 @@ export class Game {
           toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
           toggle('Verdict', s.verdict, (v) => { s.verdict = v; if (this.scene) this.scene.cfg.verdict = v; },
             'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'),
+          toggle('Clear Sight', s.clearSight, (v) => { s.clearSight = v; if (this.scene) this.scene.cfg.clearSight = v; },
+            'Always show only what the physics cares about: flat light, gate wiring, timers, terrain by kind. Hold C to see it any time.'),
           el('label', { class: 'set', title: 'Colours for doomed and saved fates. Their thread patterns (dashes, dots, diamonds) differ in either.' },
             el('span', { text: 'Fate colours' }), palette),
           el('h3', { text: 'Access' }),
@@ -858,9 +983,16 @@ function clampReach(v: number): number {
   return Number.isFinite(v) ? Math.max(TOUCH_REACH.min, Math.min(TOUCH_REACH.max, Math.round(v))) : TOUCH_REACH.def;
 }
 
-function fmtTime(ticks: number): string {
-  const s = Math.floor(ticks / 30);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+/** Copy text to the clipboard; with no clipboard (an insecure page, a refusal) show it in `box` to copy by hand. */
+function copyOut(text: string, btn: HTMLElement, box: HTMLTextAreaElement): void {
+  const show = (msg: string) => {
+    btn.textContent = msg;
+    box.value = text;
+    box.style.display = msg === 'Copied' ? 'none' : 'block';
+    if (msg !== 'Copied') box.select();
+  };
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => show('Copied'), () => show('Select and copy below'));
+  else show('Select and copy below');
 }
 
 export { starCount };

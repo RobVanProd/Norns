@@ -2,8 +2,9 @@
 // storage); every access is guarded and the game works without it.
 import { REALM_LIST, type RealmInfo } from '../levels';
 import type { LevelDef } from '../sim/level';
-import { decodeWeave, encodeWeave, isStale, type Weave } from '../sim/weave';
+import { SIM_VERSION, decodeWeave, encodeWeave, isStale, levelHash, type Weave } from '../sim/weave';
 import { defaultKeys, readKeys, type KeyBinds } from './input';
+import { sameFacts, verifyWeave, type RunFacts } from './share';
 
 export const HOODS: { id: string; name: string; hue: number | null; cost: number }[] = [
   { id: 'teal', name: 'Loom Teal', hue: null, cost: 0 },
@@ -43,6 +44,8 @@ export interface Settings {
   verdict: boolean;
   /** fate colours: 'classic' red / green or 'cvd' blue / orange (see setPalette in view.ts) */
   palette: 'classic' | 'cvd';
+  /** Clear Sight always on (it can also be held with C): only what the physics cares about */
+  clearSight: boolean;
   /** no screen shake or flashes, a still backdrop and calmer UI animation (default: the system's setting) */
   reduceMotion: boolean;
   /** HTML text size, ×1 to ×1.5 */
@@ -80,6 +83,8 @@ export interface SaveData {
   seen: string[];
   /** per level id, the furthest tier of Skuld's Vision watched (1-4); the Vision reopens there */
   visionTier: Record<string, number>;
+  /** per level id, personal records and past clears, from verified Weaves only (see offerRecords) */
+  records: Record<string, LevelRecords>;
 }
 
 const KEY = 'norns.save.v1';
@@ -100,10 +105,10 @@ function fresh(): SaveData {
     v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
     settings: {
       music: 0.7, sfx: 0.85, voice: 0.7, foresight: true, hints: true, zoom: 0, rewindToggle: false, verdict: true, palette: 'classic',
-      reduceMotion: prefersReducedMotion(), textSize: 1, touchReach: TOUCH_REACH.def, keys: defaultKeys(),
+      clearSight: false, reduceMotion: prefersReducedMotion(), textSize: 1, touchReach: TOUCH_REACH.def, keys: defaultKeys(),
     },
     seenIntro: false,
-    weaves: {}, seen: [], visionTier: {},
+    weaves: {}, seen: [], visionTier: {}, records: {},
   };
   refreshOpened(s);
   return s;
@@ -126,6 +131,7 @@ export function loadSave(): SaveData {
       opened: Array.isArray(d.opened) ? d.opened : legacyOpened(stars),
       weaves: d.weaves && typeof d.weaves === 'object' ? d.weaves : {},
       seen: Array.isArray(d.seen) ? d.seen : [], visionTier: d.visionTier && typeof d.visionTier === 'object' ? d.visionTier : {},
+      records: d.records && typeof d.records === 'object' ? d.records : {},
       upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...settings, keys: readKeys(settings.keys) },
     } as SaveData;
     refreshOpened(s);
@@ -245,9 +251,7 @@ export function recordOutcome(s: SaveData, o: Outcome): { mask: number; newMask:
 
 /** Better run first: more saved, then fewer callings, then fewer ticks. */
 function better(a: Omit<BestWeave, 'weave'>, b: Omit<BestWeave, 'weave'>): boolean {
-  if (a.saved !== b.saved) return a.saved > b.saved;
-  if (a.used !== b.used) return a.used < b.used;
-  return a.ticks < b.ticks;
+  return beats('saved', a, b);
 }
 
 /** The stored best run of a level, if it still replays: a Weave from another simulation version or
@@ -267,4 +271,70 @@ export function offerWeave(s: SaveData, def: LevelDef, w: Weave, run: { saved: n
   if (old && !better(cand, old)) return false;
   s.weaves[def.id] = { weave: encodeWeave(w), ...cand };
   return true;
+}
+
+// ------------------------------------------------------------------ personal records
+
+/** One verified clear: what it achieved and its encoded Weave. */
+export interface RecordRun {
+  saved: number;
+  used: number;
+  ticks: number;
+  weave: string;
+}
+
+export type RecordKey = 'saved' | 'used' | 'ticks';
+export const RECORD_KEYS: RecordKey[] = ['saved', 'used', 'ticks'];
+
+/** A level's personal records (most saved, fewest callings, fastest finish) and the player's own past
+ *  clears, all for one simulation version and one shape of the level. */
+export interface LevelRecords {
+  v: number;
+  hash: number;
+  saved: RecordRun;
+  used: RecordRun;
+  ticks: RecordRun;
+  /** the last RUNS_KEPT verified clears, oldest first, as [saved, callings, ticks] */
+  runs: [number, number, number][];
+}
+
+const RUNS_KEPT = 100;
+
+/** Does `a` beat `b` on this record? A tie goes to the other two measures, in the usual order of merit. */
+function beats(key: RecordKey, a: Omit<RecordRun, 'weave'>, b: Omit<RecordRun, 'weave'>): boolean {
+  const order: RecordKey[] = key === 'saved' ? ['saved', 'used', 'ticks'] : key === 'used' ? ['used', 'saved', 'ticks'] : ['ticks', 'saved', 'used'];
+  for (const k of order) if (a[k] !== b[k]) return k === 'saved' ? a[k] > b[k] : a[k] < b[k];
+  return false;
+}
+
+/** The level's records, if they were set on this simulation version and this shape of the level. */
+export function levelRecords(s: SaveData, def: LevelDef): LevelRecords | null {
+  const r = s.records[def.id];
+  return r && r.v === SIM_VERSION && r.hash === levelHash(def) && Array.isArray(r.runs) ? r : null;
+}
+
+/**
+ * Offer a finished run to the records. Its Weave is replayed headless first: a run whose replay goes out
+ * of step, or ends anywhere but exactly where `claimed` says, is refused and changes nothing. Only a
+ * verified clear (quota met, any guardian felled) sets records and joins the past runs. Returns the
+ * verified facts (null if refused) and the records this run set; the caller writes the save.
+ */
+export function offerRecords(s: SaveData, def: LevelDef, w: Weave, claimed: RunFacts): { facts: RunFacts | null; set: RecordKey[] } {
+  const facts = verifyWeave(def, w, claimed.ticks);
+  if (!facts || !sameFacts(facts, claimed)) return { facts: null, set: [] };
+  if (facts.saved < def.quota || facts.bossDefeated === false) return { facts, set: [] };
+  const run: RecordRun = { saved: facts.saved, used: facts.used, ticks: facts.ticks, weave: encodeWeave(w) };
+  let r = levelRecords(s, def);
+  const set: RecordKey[] = [];
+  if (!r) {
+    // the first clear, or the first since the level or the rules changed: older records no longer compare
+    r = { v: SIM_VERSION, hash: levelHash(def), saved: run, used: run, ticks: run, runs: [] };
+    s.records[def.id] = r;
+    set.push(...RECORD_KEYS);
+  } else {
+    for (const k of RECORD_KEYS) if (beats(k, run, r[k])) { r[k] = run; set.push(k); }
+  }
+  r.runs.push([run.saved, run.used, run.ticks]);
+  if (r.runs.length > RUNS_KEPT) r.runs.splice(0, r.runs.length - RUNS_KEPT);
+  return { facts, set };
 }
