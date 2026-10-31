@@ -294,7 +294,7 @@ export class Game {
       ),
       skills,
       el('div', { class: 'row' }, look, begin),
-    ), false);
+    ));
   }
 
   private results(r: PlayResult): void {
@@ -325,7 +325,9 @@ export class Game {
     const next = ALL_LEVELS[idx + 1];
     const buttons: [string, () => void, boolean?][] = [];
     if (won && next) buttons.push(['Next', () => this.playLevel(next), true]);
-    buttons.push(['Retry', () => this.playLevel(level), !won]);
+    const scene = this.scene;
+    buttons.push(['Rewind', () => { if (scene.reopen()) this.closeModal(); }, !won]);
+    buttons.push(['Retry', () => this.playLevel(level)]);
     if (!won) buttons.push(["Skuld's Vision", () => this.playLevel(level, 'vision')]);
     buttons.push(['Map', () => this.showMap()]);
     const lines = [
@@ -341,7 +343,7 @@ export class Game {
       won && level === ALL_LEVELS[ALL_LEVELS.length - 1] ? el('p', { class: 'flavor', text: 'Surtr\u2019s fire gutters out. The Wyrdlings are home, and the Norns weave on.' }) : null,
       stars,
       el('div', { class: 'stats' }, ...lines),
-      won ? null : el('p', { class: 'flavor', text: 'No harm done — hold Rewind next time, or watch Skuld’s Vision for one path that works.' }),
+      won ? null : el('p', { class: 'flavor', text: 'No harm done. Rewind to where it went wrong, or watch Skuld’s Vision for one path that works.' }),
       this.row(buttons)));
   }
 
@@ -355,28 +357,36 @@ export class Game {
     return r;
   }
 
-  private pauseMenu(): void {
+  /** Whether the game was running when the pause menu first opened (kept across Settings and back). */
+  private resumeOnClose = false;
+
+  private pauseMenu(reopen = false): void {
     if (this.screen !== 'play' || !this.scene) { this.showMap(); return; }
-    if (this.modal) { this.closeModal(); return; }
+    // Esc / the menu button with a dialog open acts like that dialog's own close action
+    if (this.modal && !reopen) { this.modalDismiss?.(); return; }
     const scene = this.scene;
-    const wasPaused = scene.paused;
-    if (!wasPaused && scene.state === 'play') scene.togglePause();
+    if (!reopen) {
+      this.resumeOnClose = !scene.paused && scene.state === 'play';
+      if (this.resumeOnClose) scene.togglePause();
+    }
     const level = this.current!;
-    const resume = () => { this.closeModal(); if (!wasPaused && scene.paused) scene.togglePause(); };
+    const resume = () => { this.closeModal(); if (this.resumeOnClose && scene.paused) scene.togglePause(); };
     const buttons: [string, () => void, boolean?][] = [
       ['Resume', resume, true],
       ['Restart', () => this.playLevel(level)],
       ["Skuld's Vision", () => this.playLevel(level, 'vision')],
     ];
-    if (scene.sim.d.saved >= level.quota && scene.state === 'play') buttons.push(['End level now', () => { scene.sim.finishNow(); this.closeModal(); if (scene.paused) scene.togglePause(); }]);
-    buttons.push(['Settings', () => this.settings(() => this.pauseMenu())], ['World map', () => this.showMap()]);
+    const finish = () => { scene.sim.finishNow(); this.closeModal(); if (scene.paused) scene.togglePause(); };
+    // ending is always possible: a stalled or doomed run should never need a restart from the menu
+    if (scene.state === 'play') buttons.push(scene.sim.d.saved >= level.quota ? ['End level now', finish] : ['Cut the Threads (give up)', finish]);
+    buttons.push(['Settings', () => this.settings(() => this.pauseMenu(true))], ['World map', () => this.showMap()]);
     const col = el('div', { class: 'col' });
     for (const [t, f, gold] of buttons) {
       const b = el('button', { class: `btn${gold ? ' gold' : ''}`, text: t });
       b.addEventListener('click', () => { audio.sfx('ui_click'); f(); });
       col.append(b);
     }
-    this.openModal(el('div', { class: 'panel modal pause' }, el('h2', { text: 'Paused' }), el('p', { class: 'flavor', text: level.name }), col));
+    this.openModal(el('div', { class: 'panel modal pause' }, el('h2', { text: 'Paused' }), el('p', { class: 'flavor', text: level.name }), col), resume);
   }
 
   // ------------------------------------------------------------------ loom
@@ -465,7 +475,8 @@ export class Game {
     }
     zoom.addEventListener('change', () => { s.zoom = Number(zoom.value); this.p.zoomOffset = s.zoom; this.resize(); writeSave(this.save); });
     const done = el('button', { class: 'btn gold', text: 'Done' });
-    done.addEventListener('click', () => { writeSave(this.save); audio.sfx('ui_click'); if (back) back(); else this.closeModal(); });
+    const close = () => { writeSave(this.save); this.closeModal(); back?.(); };
+    done.addEventListener('click', () => { audio.sfx('ui_click'); close(); });
     const fs = el('button', { class: 'btn', text: 'Fullscreen' });
     fs.addEventListener('click', () => { void document.documentElement.requestFullscreen?.().catch(() => undefined); });
     const reset = el('button', { class: 'btn danger', text: 'Erase progress' });
@@ -484,23 +495,29 @@ export class Game {
       toggle('Tutorial hints', s.hints, (v) => { s.hints = v; }),
       el('label', { class: 'set' }, el('span', { text: 'Pixel zoom' }), zoom),
       el('div', { class: 'row' }, fs, reset),
-      el('div', { class: 'row' }, done)));
+      el('div', { class: 'row' }, done)), close);
   }
 
   // ------------------------------------------------------------------ modal
 
-  private openModal(content: HTMLElement, dismissable = true): void {
+  /** What closing the open dialog means (backdrop click, Esc); null = it can only be closed by its buttons. */
+  private modalDismiss: (() => void) | null = null;
+
+  private openModal(content: HTMLElement, onDismiss?: () => void): void {
     this.closeModal();
     const m = el('div', { class: 'modal-back' }, content);
-    if (dismissable) m.addEventListener('pointerdown', (e) => { if (e.target === m) this.closeModal(); });
+    // story, intro and results cards must not vanish on a stray click; pause and settings close to a safe state
+    if (onDismiss) m.addEventListener('pointerdown', (e) => { if (e.target === m) onDismiss(); });
     m.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.modal = m;
+    this.modalDismiss = onDismiss ?? null;
     this.ui.append(m);
   }
 
   private closeModal(): void {
     this.modal?.remove();
     this.modal = null;
+    this.modalDismiss = null;
   }
 }
 

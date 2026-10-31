@@ -36,6 +36,8 @@ body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit
   pointer-events: none;
 }
 #ui > * { pointer-events: none; }
+/* dialogs must catch every click (outranks the rule above), or clicks fall through to the level */
+#ui > .modal-back { pointer-events: auto; }
 .px { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
 button { font-family: var(--font); color: var(--ink); cursor: pointer; touch-action: manipulation; }
 h1, h2, h3 { font-weight: 700; margin: 0 0 8px; letter-spacing: 1px; }

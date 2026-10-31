@@ -4,6 +4,7 @@ import { audio } from '../audio';
 import type { ArtBundle } from '../art/bundle';
 import type { Pipeline } from '../render/pipeline';
 import { SKILLS, SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
+import { bossPhase } from '../sim/boss';
 import { ForesightJob, type Fate } from '../sim/foresight';
 import type { LevelDef } from '../sim/level';
 import { Sim } from '../sim/sim';
@@ -63,6 +64,8 @@ export class PlayScene {
   armed: SkillId | null = null;
   hover: number | null = null;
   private hoverPt: { x: number; y: number; touch: boolean } | null = null;
+  /** Touch: the Wyrdling a held finger pressed (preview follows it; release grants to it). */
+  private heldTarget: number | null = null;
   private fate: Fate | null = null;
   private branch: Fate | null = null;
   private branchKey = '';
@@ -144,11 +147,16 @@ export class PlayScene {
     this.input = input;
     input.h = {
       hover: (x, y, touch) => { this.hoverPt = { ...this.p.screenToWorld(x, y, this.dpr), touch }; },
-      leave: () => { this.hoverPt = null; },
-      press: (x, y, touch) => { this.hoverPt = { ...this.p.screenToWorld(x, y, this.dpr), touch }; },
+      leave: () => { this.hoverPt = null; this.heldTarget = null; },
+      press: (x, y, touch) => {
+        this.hoverPt = { ...this.p.screenToWorld(x, y, this.dpr), touch };
+        // a held finger stays on the Wyrdling it pressed, even as that Wyrdling walks out from under it
+        if (touch) this.heldTarget = this.pick(this.hoverPt.x, this.hoverPt.y, true);
+      },
       act: (x, y) => this.act(this.p.screenToWorld(x, y, this.dpr)),
       tap: (x, y, touch, sx, sy) => this.tap(this.p.screenToWorld(x, y, this.dpr), touch, this.p.screenToWorld(sx, sy, this.dpr)),
       pan: (dx, dy) => {
+        this.heldTarget = null;
         this.camX += (dx * this.dpr) / this.p.scale;
         this.camY += (dy * this.dpr) / this.p.scale;
         this.camVX = 0; this.camVY = 0;
@@ -258,7 +266,10 @@ export class PlayScene {
     if (this.cfg.mode !== 'play' || this.state === 'done') return;
     audio.unlock();
     if (this.state === 'intro') this.begin();
-    const id = this.pick(pt.x, pt.y, touch) ?? (start ? this.pick(start.x, start.y, touch) : null);
+    const held = this.heldTarget;
+    this.heldTarget = null;
+    const id = held !== null && isAlive(this.sim.d.wyrds[held]) ? held
+      : this.pick(pt.x, pt.y, touch) ?? (start ? this.pick(start.x, start.y, touch) : null);
     if (id === null) return;
     this.grant(id);
   }
@@ -320,8 +331,16 @@ export class PlayScene {
 
   // ------------------------------------------------------------------ frame
 
+  /** Boss music layer last sent to the audio engine (it only adds layers on bar boundaries). */
+  private musicIntensity: 0 | 1 | 2 = 0;
+
   update(dt: number): void {
     this.time += dt;
+    // the boss theme gains brass, choir and double-time drums as the guardian weakens; following the
+    // live state (not hit events) keeps it right after a rewind too
+    const boss = this.sim.d.boss;
+    const intensity = this.cfg.mode !== 'attract' && boss && boss.hp > 0 ? bossPhase(boss) : 0;
+    if (intensity !== this.musicIntensity) { this.musicIntensity = intensity; audio.setIntensity(intensity); }
     const held = this.input?.held;
     if (held && this.cfg.mode === 'play') {
       const sp = 260 * dt;
@@ -373,7 +392,8 @@ export class PlayScene {
     else { this.fate = null; this.branch = null; }
 
     // hover
-    this.hover = this.hoverPt ? this.pick(this.hoverPt.x, this.hoverPt.y, this.hoverPt.touch) : null;
+    const heldId = this.heldTarget !== null && isAlive(this.sim.d.wyrds[this.heldTarget]) ? this.heldTarget : null;
+    this.hover = heldId ?? (this.hoverPt ? this.pick(this.hoverPt.x, this.hoverPt.y, this.hoverPt.touch) : null);
 
     // finish
     if (this.sim.d.finished && this.state === 'play') {
@@ -422,7 +442,7 @@ export class PlayScene {
     const horizon = Math.round(this.cfg.horizonSec * TICK_RATE);
     const sim = this.sim;
     // paused: plenty of frame time; running: a few ms per frame, never a hitch
-    const budget = this.paused || this.state === 'intro' ? 12 : 4;
+    const budget = this.debugFullForesight ? Infinity : this.paused || this.state === 'intro' ? 12 : 4;
     const stale = !this.fate || sim.d.tick - this.fate.from >= 6 || sim.d.tick < this.fate.from;
     if (stale && !this.fateJob) this.fateJob = new ForesightJob(sim, horizon);
     if (this.fateJob && this.fateJob.advance(budget)) {
@@ -451,6 +471,20 @@ export class PlayScene {
     }
   }
 
+  /** Results screen → back into the level just before it ended, paused, so the player can keep rewinding.
+   *  Stars already earned stay earned (the save merges outcomes). */
+  reopen(): boolean {
+    if (this.state !== 'done') return false;
+    const prev = this.timeline.back(this.sim.d.tick);
+    if (!prev) return false;
+    this.sim = prev;
+    this.state = 'play';
+    this.rewinds++;
+    if (!this.paused) this.togglePause();
+    this.fate = null; this.fateJob = null; this.branchJob = null; this.branchKey = '';
+    return true;
+  }
+
   /** Dev tooling (scripts/frames.mjs): advance exactly n ticks with the same per-tick work as update(). */
   debugAdvance(n: number): void {
     for (let i = 0; i < n && !this.sim.d.finished; i++) {
@@ -465,6 +499,8 @@ export class PlayScene {
   debugCam: { x: number; y: number } | null = null;
   /** Dev tooling: stop real-time ticking without the pause dimming. */
   debugHold = false;
+  /** Dev tooling: finish Foresight jobs every frame, so captured frames don't depend on machine speed. */
+  debugFullForesight = false;
 
   render(): void {
     if (this.debugCam) { this.camX = this.debugCam.x; this.camY = this.debugCam.y; this.clampCam(); }

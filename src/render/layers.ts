@@ -217,6 +217,9 @@ export class LiquidLayer {
         uFoam: { value: lava ? new THREE.Vector3(1.0, 0.86, 0.4) : new THREE.Vector3(0.75, 0.93, 1.0) },
         uAlpha: { value: lava ? 1.0 : 0.78 }, uSurface: { value: rect.y }, uLava: { value: lava ? 1 : 0 },
       },
+      // worldToClip flips y, which turns this quad's winding clockwise: with the default FrontSide it
+      // was culled and every pool of water, lava and boss magma was invisible
+      side: THREE.DoubleSide,
       transparent: true, depthTest: false, depthWrite: false,
     });
     const geo = new THREE.BufferGeometry();
