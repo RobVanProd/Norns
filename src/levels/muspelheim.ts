@@ -34,8 +34,8 @@ export const U1: LevelDef = {
     { type: 'decor', sprite: 'runestone', x: 500, y: 227 },
   ],
   solution: [
-    { nth: 0, x: 156, dir: 1, skill: 'blast' },
-    { nth: 0, x: 254, dir: 1, skill: 'blast' },
+    { nth: 0, x: 156, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
+    { nth: 0, x: 254, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
   ],
 };
 
@@ -76,8 +76,8 @@ export const U2: LevelDef = {
     { type: 'decor', sprite: 'brazier', x: 540, y: 227 },
   ],
   solution: [
-    { nth: 0, x: 178, dir: 1, skill: 'blast' },
-    { nth: 0, x: 296, dir: 1, skill: 'blast' },
+    { nth: 0, x: 178, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
+    { nth: 0, x: 296, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
   ],
 };
 
@@ -116,10 +116,10 @@ export const U3: LevelDef = {
     { type: 'light', x: 430, y: 200, r: 90, color: '#ff7a30', flicker: 0.3 },
   ],
   solution: [
-    { nth: 0, x: 150, dir: 1, skill: 'blast' },
-    { nth: 1, x: 236, dir: 1, skill: 'blast' },
-    { nth: 1, skill: 'climber' },
-    { nth: 3, x: 326, dir: 1, skill: 'blast' },
+    { nth: 0, x: 150, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
+    { nth: 1, x: 236, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
+    { nth: 1, skill: 'climber', purpose: ['quota', 'target'] },
+    { nth: 3, x: 326, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
   ],
 };
 
@@ -162,8 +162,8 @@ export const U4: LevelDef = {
     { type: 'decor', sprite: 'brazier', x: 520, y: 227 },
   ],
   solution: [
-    { nth: 0, x: 70, dir: 1, skill: 'blast' },
-    { nth: 0, x: 378, dir: 1, skill: 'blast' },
+    { nth: 0, x: 70, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
+    { nth: 0, x: 378, dir: 1, skill: 'blast', purpose: ['quota', 'target'] },
   ],
 };
 
@@ -201,9 +201,7 @@ export const U5: LevelDef = {
   ],
   boss: { kind: 'herald', x: 590, y: 310, hp: 5, delay: 160, arena: { x0: 12, x1: 512, floorY: 255 } },
   solution: [
-    { nth: 0, skill: 'climber' },
-    { nth: 1, skill: 'climber' },
-    { nth: 2, skill: 'climber' },
+    { nth: 0, skill: 'climber', purpose: ['quota', 'target', 'boss'] },
   ],
 };
 

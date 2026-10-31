@@ -20,7 +20,7 @@ Vitest.
 | Install | `npm ci` (Node `^20.19` or `>=22.12`; CI uses 22) |
 | Dev server | `npm run dev` → http://localhost:5173 (binds all interfaces) |
 | Typecheck | `npm run typecheck` |
-| Tests | `npm test` (about 3 s: sim, bosses, every level's solution and null run, view fit) |
+| Tests | `npm test` (about 5 s: sim, bosses, every level's solution, its steps and null run, view fit, slack report) |
 | Production build | `npm run build` → `dist/` |
 | Single-file build | `node scripts/artifact.mjs <out.html>` (everything inlined) |
 | Level preview PNG | `npm run level:png <id> [out.png] [--null] [--ticks N] [--scale 2] [--at T]` |
@@ -72,7 +72,8 @@ src/game/       game.ts (scenes, menus, URL params), play.ts (PlayScene: loop, c
 src/ui/         HUD (hud.ts), DOM helpers, style.css
 src/art/        procedural pixel art (px.ts toolkit, characters, bosses, materials, backgrounds)
 src/audio/      offline-synthesised instruments, sequencer, songs, SFX
-tests/          sim.test.ts, boss.test.ts, levels.test.ts, scale.test.ts
+tests/          sim.test.ts, boss.test.ts, levels-<realm>.test.ts (level checks + slack report, via
+                helpers.ts), levels.test.ts, scale.test.ts, timeline.test.ts
 docs/           ART_SPEC.md, AUDIO_SPEC.md, images/ (README screenshots)
 ```
 
@@ -100,10 +101,12 @@ Data flow per frame (`PlayScene.update` then `render`):
    - Terrain is shared copy-on-write between clones. Write through `terrain.set()` or
      `terrain.writable(ci)`, never into a chunk array you got from `terrain.chunks`.
    - The static back-wall array is shared and must never be mutated after the build.
-3. **Every level is solvable and not trivial.** `tests/levels.test.ts` checks two things:
+3. **Every level is solvable and not trivial.** `tests/levels-<realm>.test.ts` checks three things:
    - the scripted solution reaches the second-star `target` (or `solutionSaves`), collects the
      spindle, and kills the boss;
-   - a null run with no callings stays under the `quota`.
+   - every step is load-bearing: the solution without exactly that step loses one of the step's
+     `purpose`s;
+   - a null run with no callings stays under the `quota` and never collects the spindle.
 4. **The view never shows past the level.** `fitView` (`src/render/scale.ts`) picks an integer
    scale whose view fits inside the level and covers the screen with a centred crop. Camera
    shake is clamped too.
@@ -133,6 +136,8 @@ Data flow per frame (`PlayScene.update` then `render`):
    hazards, decor, lights, and spindle and Seiðr stones where relevant.
 3. Write `solution`: a list of `SolutionStep`. Each step fires once its conditions hold: the
    `nth` Wyrdling, past `x` in direction `dir`, after tick `t`, within `minY`/`maxY`, in `state`.
+   Tag each step's `purpose` with what dropping it would lose (`quota`, `target`, `spindle`,
+   `boss`; `finish` if it is only needed so the run ends). A step that loses nothing goes.
 4. Iterate with `npm run level:png <id>`, which draws the solution's trails. Use
    `npm run level:trace <id> <nth>` for one Wyrdling, or `bosstrace.ts` for boss levels, until
    `npm test` passes.
