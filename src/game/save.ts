@@ -1,6 +1,7 @@
 // Progression + settings persistence. localStorage can be unavailable (private mode, blocked
 // storage); every access is guarded and the game works without it.
-import { ALL_LEVELS, REALM_LIST } from '../levels';
+import { REALM_LIST, type RealmInfo } from '../levels';
+import type { LevelDef } from '../sim/level';
 
 export const HOODS: { id: string; name: string; hue: number | null; cost: number }[] = [
   { id: 'teal', name: 'Loom Teal', hue: null, cost: 0 },
@@ -27,17 +28,21 @@ export interface SaveData {
   upgrades: { foresight: number };
   hood: string;
   hoods: string[];
-  settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean };
+  /** Ids of every level ever opened. Unlocks stick, so a level added to a realm later never relocks one. */
+  opened: string[];
+  settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean };
   seenIntro: boolean;
 }
 
 const KEY = 'norns.save.v1';
 
 function fresh(): SaveData {
-  return {
-    v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'],
-    settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false }, seenIntro: false,
+  const s: SaveData = {
+    v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
+    settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false }, seenIntro: false,
   };
+  refreshOpened(s);
+  return s;
 }
 
 export function loadSave(): SaveData {
@@ -47,10 +52,13 @@ export function loadSave(): SaveData {
     const d = JSON.parse(raw) as Partial<SaveData> & { upgrades?: { rewind?: number } };
     const f = fresh();
     const refund = RETIRED_REWIND_COSTS.slice(0, d.upgrades?.rewind ?? 0).reduce((a, b) => a + b, 0);
-    return {
-      ...f, ...d, threads: (d.threads ?? 0) + refund,
+    const s = {
+      ...f, ...d, threads: (d.threads ?? 0) + refund, stars: d.stars ?? {}, opened: Array.isArray(d.opened) ? d.opened : [],
       upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...d.settings },
     } as SaveData;
+    // older saves have no opened list: pin down what their stars open today
+    refreshOpened(s);
+    return s;
   } catch {
     return fresh();
   }
@@ -72,18 +80,54 @@ export function totalStars(s: SaveData): number {
   return Object.values(s.stars).reduce((a, m) => a + starCount(m), 0);
 }
 
-/** A level is playable if it is the first, or the previous level in order is cleared. */
-export function isUnlocked(s: SaveData, levelId: string): boolean {
-  const i = ALL_LEVELS.findIndex((l) => l.id === levelId);
-  if (i <= 0) return true;
-  return ((s.stars[ALL_LEVELS[i - 1].id] ?? 0) & 1) === 1;
+// Unlocks follow ids and each realm's own puzzle list, never a global index, and anything once
+// opened stays open (SaveData.opened). Only clearing at quota counts; no star totals gate anything.
+
+/** A guardian wakes once this many of its realm's puzzles are cleared (or all of them, if fewer). */
+export const BOSS_NEEDS = 3;
+
+function cleared(s: SaveData, id: string): boolean {
+  return ((s.stars[id] ?? 0) & 1) === 1;
 }
 
-export function realmUnlocked(s: SaveData, realmIndex: number): boolean {
-  if (realmIndex === 0) return true;
-  const prev = REALM_LIST[realmIndex - 1];
-  const last = prev.levels[prev.levels.length - 1];
-  return ((s.stars[last.id] ?? 0) & 1) === 1;
+function puzzles(r: RealmInfo): LevelDef[] {
+  return r.levels.filter((l) => !l.boss);
+}
+
+/** Open by today's rules alone, without the sticky list. */
+function openNow(s: SaveData, realms: RealmInfo[], ri: number, level: LevelDef): boolean {
+  const ps = puzzles(realms[ri]);
+  if (level.boss) return ps.filter((l) => cleared(s, l.id)).length >= Math.min(BOSS_NEEDS, ps.length);
+  // clearing a puzzle opens the next two in its realm
+  const i = ps.indexOf(level);
+  return i === 0 || ps.slice(Math.max(0, i - 2), i).some((l) => cleared(s, l.id));
+}
+
+/** A realm opens when the previous realm's guardian falls, or when all of its puzzles are cleared. */
+export function realmUnlocked(s: SaveData, realmIndex: number, realms: RealmInfo[] = REALM_LIST): boolean {
+  const r = realms[realmIndex];
+  if (!r) return false;
+  if (realmIndex === 0 || r.levels.some((l) => s.opened.includes(l.id))) return true;
+  const prev = realms[realmIndex - 1];
+  return prev.levels.some((l) => l.boss && cleared(s, l.id)) || puzzles(prev).every((l) => cleared(s, l.id));
+}
+
+export function isUnlocked(s: SaveData, levelId: string, realms: RealmInfo[] = REALM_LIST): boolean {
+  if (s.opened.includes(levelId)) return true;
+  const ri = realms.findIndex((r) => r.levels.some((l) => l.id === levelId));
+  if (ri < 0) return false;
+  return realmUnlocked(s, ri, realms) && openNow(s, realms, ri, realms[ri].levels.find((l) => l.id === levelId)!);
+}
+
+/** Add every level that is open now to the sticky list; returns the ids that were newly added. */
+export function refreshOpened(s: SaveData, realms: RealmInfo[] = REALM_LIST): string[] {
+  const added: string[] = [];
+  for (const r of realms) {
+    for (const l of r.levels) {
+      if (!s.opened.includes(l.id) && isUnlocked(s, l.id, realms)) { s.opened.push(l.id); added.push(l.id); }
+    }
+  }
+  return added;
 }
 
 export interface Outcome {
@@ -95,8 +139,9 @@ export interface Outcome {
   bossDefeated: boolean | null;
 }
 
-/** Record a result; returns the star mask earned this run, newly earned stars and threads gained. */
-export function recordOutcome(s: SaveData, o: Outcome): { mask: number; newMask: number; threads: number } {
+/** Record a result; returns the star mask earned this run, newly earned stars, threads gained and the
+ *  ids of levels it opened. */
+export function recordOutcome(s: SaveData, o: Outcome): { mask: number; newMask: number; threads: number; opened: string[] } {
   const won = o.saved >= o.quota && o.bossDefeated !== false;
   let mask = 0;
   if (won) {
@@ -112,6 +157,7 @@ export function recordOutcome(s: SaveData, o: Outcome): { mask: number; newMask:
   s.stars[o.levelId] = prev | mask;
   if (won) s.best[o.levelId] = Math.max(prevBest, o.saved);
   s.threads += threads;
+  const opened = refreshOpened(s);
   writeSave(s);
-  return { mask, newMask, threads };
+  return { mask, newMask, threads, opened };
 }

@@ -9,7 +9,7 @@ import type { Pipeline } from '../render/pipeline';
 import { SpriteBatch, type SpriteOpts } from '../render/spriteBatch';
 import { TerrainLayer } from '../render/terrainLayer';
 import { bossCore, bossPhase, magmaLevel, surfaceY } from '../sim/boss';
-import type { SkillId } from '../sim/constants';
+import { SKILL_INFO, type SkillId } from '../sim/constants';
 import type { Fate } from '../sim/foresight';
 import type { Sim } from '../sim/sim';
 import type { Hazard, SimEvent, Wyrd } from '../sim/state';
@@ -552,8 +552,8 @@ export class GameView {
         const bad = inp.armed !== null && !inp.canAssign;
         const ring = this.f('cursor.ring', Math.floor(inp.time * 10));
         this.over.push(ring, w.x, w.y - 6, bad ? { r: 1, g: 0.35, b: 0.3 } : { r: 1, g: 0.95, b: 0.6 });
-        const label = stateLabel(w);
-        this.text(this.over, label, w.x, w.y - 28, bad ? 1 : 0.95, bad ? 0.55 : 0.95, bad ? 0.5 : 0.85, 0.95);
+        // the tag names what a click would grant; a click that grants nothing gets no tag (the ring says why)
+        if (inp.armed !== null && inp.canAssign) this.text(this.over, SKILL_INFO[inp.armed].name, w.x, w.y - 28, 0.95, 0.95, 0.85, 0.95);
       }
     }
   }
@@ -873,14 +873,4 @@ export class GameView {
     }
     void sim;
   }
-}
-
-function stateLabel(w: Wyrd): string {
-  const perms = `${w.climber ? ' +climb' : ''}${w.glider ? ' +glide' : ''}`;
-  const names: Partial<Record<string, string>> = {
-    walk: 'walker', wait: 'waiting', fall: 'falling', glide: 'gliding', glide_open: 'gliding', climb: 'climbing', hoist: 'climbing', warden: 'warden',
-    weave: `weaver ${w.planks}`, shrug: 'walker', bash: 'basher', mine: 'miner', dig: 'digger', plant: 'rune', leap: 'leaping',
-    tumble: 'flung!', frozen: 'frozen', land: 'walker',
-  };
-  return (names[w.st] ?? w.st) + perms;
 }

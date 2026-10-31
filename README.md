@@ -78,8 +78,9 @@ for a second star, and find the Golden Spindle for a third.
   Above, granting Weaver at the gorge edge would leave 2 fewer Wyrdlings lost, so the label is
   green.
 - **Verðandi's callings.** Grant skills, pause, and fast-forward at 2× or 4×.
-- **Urðr's Rewind.** Hold to unspool up to 20 seconds, or up to 60 with upgrades. Rewinding is
-  never penalised, so experimenting is free.
+- **Urðr's Rewind.** Hold to unspool time, as far back as the start of the level. Rewinding is
+  never penalised, so experimenting is free. If holding is awkward, set Settings → Rewind to
+  Toggle: one press starts it and the next stops it.
 
 Every boss attack is telegraphed with a marker or a warning band. The simulation is
 deterministic, so Foresight also predicts exactly who an attack will hit.
@@ -104,13 +105,15 @@ deterministic, so Foresight also predicts exactly who an attack will hit.
 |---|---|---|
 | Choose a calling | click the bar, or press `1`–`9` | tap the bar |
 | Grant it | press on a Wyrdling (it applies the moment you click) | tap a Wyrdling; press and hold to preview its fate first |
+| Put the calling away | `Esc` or right-click | tap the × on the armed calling |
 | Pan | drag empty space, arrow keys or WASD, mouse wheel | drag |
 | Zoom | `+` / `-`, or Ctrl + wheel | pinch |
 | Pause | `Space` or `P` | pause button |
+| Step one tick while paused | `,` back / `.` forward (with Shift: one second) | ◀ / ▶ beside the pause button |
 | Fast-forward 1× / 2× / 4× | `F` | speed button |
-| Rewind | hold `R` (or Backspace) | hold ◀◀ |
+| Rewind | hold `R` (or Backspace); in Toggle mode press once to start, again to stop | hold ◀◀; in Toggle mode tap to start, tap to stop |
 | Foresight on/off | `V` | eye button |
-| Menu | `Esc` | home button |
+| Menu | `Esc` (when no calling is armed) | home button |
 
 ## Three realms, fifteen levels, three bosses
 
@@ -144,10 +147,13 @@ fires, another stone lights up somewhere else in the arena.
 ## Progression
 
 - **Stars**: one for meeting the quota, one for the higher target, one for the Golden Spindle.
+- **Unlocks**: clearing a level (meeting its quota) opens the next two levels in its realm. A
+  realm's guardian wakes once three of its puzzle levels are cleared. The next realm opens when
+  the guardian falls, or when every puzzle level in the realm is cleared. The second and third
+  stars never lock anything.
 - **Threads**: earned per new star (5 each) and for beating your best save count. Spend them at
   **the Loom**:
   - longer Foresight (4 → 10 s);
-  - longer Rewind (20 → 60 s);
   - six hood dyes for your Wyrdlings.
 - **Skuld's Vision** replays a verified solution if you're stuck. It's offered after a failed
   attempt and in the pause menu.

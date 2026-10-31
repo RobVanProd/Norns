@@ -24,6 +24,8 @@ export interface PlayConfig {
   horizonSec: number;
   foresight: boolean;
   hints: boolean;
+  /** Rewind setting: false = runs while R / the button is held, true = press to start, press again to stop. */
+  rewindToggle: boolean;
 }
 
 export interface PlayResult {
@@ -39,6 +41,8 @@ export interface PlayResult {
 export interface PlayHooks {
   finished(r: PlayResult): void;
   menu(): void;
+  /** Whether a menu or card is open over the level (Esc then belongs to it). */
+  dialogOpen(): boolean;
   restart(): void;
   foresightChanged(on: boolean): void;
 }
@@ -113,10 +117,11 @@ export class PlayScene {
     if (cfg.mode === 'play' && uiRoot) {
       this.hud = new Hud(uiRoot, art.icons, cfg.level.skills, {
         skill: (s) => this.selectSkill(s),
+        disarm: () => this.disarm(),
         pause: () => this.togglePause(),
         step: (n) => this.stepTicks(n),
         speed: () => this.cycleSpeed(),
-        rewind: (on) => this.setRewind(on),
+        rewind: (down) => this.rewindInput(down),
         foresight: () => this.toggleForesight(),
         restart: () => hooks.restart(),
         menu: () => hooks.menu(),
@@ -172,6 +177,7 @@ export class PlayScene {
         this.clampCam();
       },
       key: (code, down, repeat) => this.key(code, down, repeat),
+      cancel: () => this.disarm(),
     };
   }
 
@@ -180,7 +186,8 @@ export class PlayScene {
       if (down && code === 'Escape') this.hooks.menu();
       return;
     }
-    if (code === 'KeyR' || code === 'Backspace') { this.setRewind(down); return; }
+    // key repeat must not restart a rewind that stopped at the first tick (or flip a toggle)
+    if (code === 'KeyR' || code === 'Backspace') { if (!repeat) this.rewindInput(down); return; }
     if (code === 'Blur') { this.setRewind(false); return; }
     if (!down || repeat) return;
     const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(code);
@@ -195,16 +202,28 @@ export class PlayScene {
       case 'Space': case 'KeyP': this.togglePause(); break;
       case 'KeyF': this.cycleSpeed(); break;
       case 'KeyV': this.toggleForesight(); break;
-      case 'Escape': this.hooks.menu(); break;
+      // Esc first puts an armed calling away; with nothing armed (or a dialog open) it is the menu key
+      case 'Escape': if (this.hooks.dialogOpen() || !this.disarm()) this.hooks.menu(); break;
       case 'Equal': case 'NumpadAdd': this.input?.h.zoom?.(1); break;
       case 'Minus': case 'NumpadSubtract': this.input?.h.zoom?.(-1); break;
     }
   }
 
+  /** Picking a calling always arms it; picking the armed one again keeps it (a double click must not
+   *  silently disarm). Esc, right-click or the armed card's × put it away. */
   selectSkill(s: SkillId): void {
-    if (this.armed === s) { this.armed = null; audio.sfx('ui_back'); }
-    else { this.armed = s; audio.sfx('select_skill'); }
+    this.armed = s;
+    audio.sfx('select_skill');
     this.branchKey = '';
+  }
+
+  /** Put the armed calling away; false if nothing was armed. */
+  disarm(): boolean {
+    if (!this.armed) return false;
+    this.armed = null;
+    audio.sfx('ui_back');
+    this.branchKey = '';
+    return true;
   }
 
   togglePause(): void {
@@ -224,6 +243,12 @@ export class PlayScene {
     this.cfg.foresight = !this.cfg.foresight;
     audio.sfx('foresight');
     this.hooks.foresightChanged(this.cfg.foresight);
+  }
+
+  /** R / the rewind button pressed (down) or released, per the hold / toggle setting. */
+  rewindInput(down: boolean): void {
+    if (this.cfg.rewindToggle) { if (down) this.setRewind(!this.rewinding); }
+    else this.setRewind(down);
   }
 
   setRewind(on: boolean): void {
@@ -321,6 +346,8 @@ export class PlayScene {
       audio.sfx('ui_deny');
       return;
     }
+    // a calling lands on the moment on screen: stop rewinding first, or the rewind would run on and undo it
+    if (this.rewinding) this.setRewind(false);
     const before = this.sim.events.length;
     if (this.sim.assign(id, this.armed)) {
       const fresh = this.sim.events.slice(before);
@@ -449,7 +476,7 @@ export class PlayScene {
       const toCome = this.total - d.spawned;
       if (!this.impossibleShown && d.saved + this.sim.aliveCount + toCome < this.cfg.level.quota && this.state === 'play') {
         this.impossibleShown = true;
-        this.hud.hint('The quota is out of reach — hold REWIND to undo, or restart.', 6);
+        this.hud.hint(`The quota is out of reach — ${this.cfg.rewindToggle ? 'tap' : 'hold'} REWIND to undo, or restart.`, 6);
       }
       if (this.impossibleShown && d.saved + this.sim.aliveCount + toCome >= this.cfg.level.quota) this.impossibleShown = false;
     }
@@ -551,7 +578,7 @@ export class PlayScene {
         name: this.cfg.level.name, out: this.sim.aliveCount, toCome: this.total - d.spawned, saved: d.saved,
         quota: this.cfg.level.quota, target: this.cfg.level.target, total: this.total,
         spindle: this.sim.L.spindle ? d.spindle : null, skills: d.skills, armed: this.armed, paused: this.paused,
-        speed: this.speed, foresight: this.cfg.foresight, rewinding: this.rewinding,
+        speed: this.speed, foresight: this.cfg.foresight, rewinding: this.rewinding, rewindToggle: this.cfg.rewindToggle,
         rewindSec: Math.max(0, (d.tick - this.timeline.oldestTick) / TICK_RATE),
         boss: b ? { hp: Math.max(0, b.hp), max: b.maxHp, name: BOSS_NAMES[b.kind] ?? b.kind } : null,
         doomed: this.fate?.dead ?? 0, horizon: this.cfg.horizonSec,

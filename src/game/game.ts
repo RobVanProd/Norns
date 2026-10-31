@@ -10,7 +10,7 @@ import { SolutionPlayer } from '../sim/solution';
 import { clear, el, pixelCanvas } from '../ui/dom';
 import { PlayScene, type PlayMode, type PlayResult } from './play';
 import {
-  HOODS, UPGRADES, isUnlocked, loadSave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave, type SaveData,
+  BOSS_NEEDS, HOODS, UPGRADES, isUnlocked, loadSave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave, type SaveData,
 } from './save';
 import { setHood } from './view';
 
@@ -138,10 +138,11 @@ export class Game {
     const scene = new PlayScene(this.p, this.art, {
       level, mode,
       horizonSec: UPGRADES.foresight.levels[this.save.upgrades.foresight],
-      foresight: s.foresight, hints: s.hints,
+      foresight: s.foresight, hints: s.hints, rewindToggle: s.rewindToggle,
     }, {
       finished: (r) => this.results(r),
       menu: () => this.pauseMenu(),
+      dialogOpen: () => this.modal !== null,
       restart: () => this.playLevel(level),
       foresightChanged: (on) => { this.save.settings.foresight = on; writeSave(this.save); },
     }, mode === 'play' ? this.screenEl : null);
@@ -188,15 +189,23 @@ export class Game {
     let i = 0;
     const text = el('p', { class: 'story-text' });
     const next = el('button', { class: 'btn gold', text: 'Next' });
-    const show = () => { text.textContent = pages[i]; next.textContent = i === pages.length - 1 ? 'To Midgard' : 'Next'; };
+    const skip = el('button', { class: 'btn', text: 'Skip' });
+    const done = () => { this.save.seenIntro = true; writeSave(this.save); this.showMap(); };
+    const show = () => {
+      text.textContent = pages[i];
+      const last = i === pages.length - 1;
+      next.textContent = last ? 'To Midgard' : 'Next';
+      skip.style.display = last ? 'none' : '';
+    };
     next.addEventListener('click', () => {
       audio.sfx('ui_click');
       i++;
-      if (i >= pages.length) { this.save.seenIntro = true; writeSave(this.save); this.showMap(); return; }
+      if (i >= pages.length) { done(); return; }
       show();
     });
+    skip.addEventListener('click', () => { audio.sfx('ui_back'); done(); });
     show();
-    this.openModal(el('div', { class: 'panel modal story' }, el('h2', { text: 'The Norns' }), text, el('div', { class: 'row' }, next)));
+    this.openModal(el('div', { class: 'panel modal story' }, el('h2', { text: 'The Norns' }), text, el('div', { class: 'row' }, next, skip)));
   }
 
   // ------------------------------------------------------------------ map
@@ -221,13 +230,16 @@ export class Game {
     REALM_LIST.forEach((r, ri) => {
       const open = realmUnlocked(this.save, ri);
       const nodes = el('div', { class: 'nodes' });
+      const puzzles = r.levels.filter((l) => !l.boss).length;
       r.levels.forEach((l, li) => {
         const unlocked = open && isUnlocked(this.save, l.id);
         const mask = this.save.stars[l.id] ?? 0;
         const stars = el('div', { class: 'stars' });
         for (let k = 0; k < 3; k++) stars.append(pixelCanvas(this.art.icons[mask & (1 << k) ? 'star' : 'star_empty'], 1, 'px icon'));
         const boss = !!l.boss;
-        const b = el('button', { class: `node${boss ? ' boss' : ''}${unlocked ? '' : ' locked'}${mask & 1 ? ' done' : ''}`, title: l.name },
+        const why = !open ? 'Realm sealed' : boss ? `Clear ${Math.min(BOSS_NEEDS, puzzles)} of ${r.name}'s threads to wake the guardian`
+          : 'Clear one of the two threads before it';
+        const b = el('button', { class: `node${boss ? ' boss' : ''}${unlocked ? '' : ' locked'}${mask & 1 ? ' done' : ''}`, title: unlocked ? l.name : `${l.name} · ${why}` },
           el('span', { class: 'n', text: boss ? '☠' : String(li + 1) }),
           el('span', { class: 'lname', text: l.name }),
           unlocked ? stars : pixelCanvas(this.art.icons.lock, 2, 'px icon'));
@@ -236,7 +248,8 @@ export class Game {
         nodes.append(b);
       });
       realms.append(el('div', { class: `realm panel ${r.id}${open ? '' : ' sealed'}` },
-        el('h2', { text: r.name }), el('div', { class: 'sub', text: open ? r.subtitle : 'Sealed — defeat the guardian below' }), nodes));
+        el('h2', { text: r.name }),
+        el('div', { class: 'sub', text: open ? r.subtitle : `Sealed: defeat ${REALM_LIST[ri - 1].name}'s guardian or clear all its threads` }), nodes));
     });
     this.screenEl.append(el('div', { class: 'map-screen' }, el('div', { class: 'tree-wrap' }, tree), header, realms));
   }
@@ -320,8 +333,10 @@ export class Game {
       if (got) setTimeout(() => audio.sfx('star', { pitch: 1 + k * 0.12 }), 250 + k * 300);
       stars.append(s);
     }
-    const idx = ALL_LEVELS.indexOf(level);
-    const next = ALL_LEVELS[idx + 1];
+    // Next: the following level, or else the first open one not yet cleared after it
+    const after = ALL_LEVELS.slice(ALL_LEVELS.indexOf(level) + 1);
+    const next = after[0] && isUnlocked(this.save, after[0].id) ? after[0]
+      : after.find((l) => isUnlocked(this.save, l.id) && !((this.save.stars[l.id] ?? 0) & 1));
     const buttons: [string, () => void, boolean?][] = [];
     if (won && next) buttons.push(['Next', () => this.playLevel(next), true]);
     const scene = this.scene;
@@ -337,10 +352,19 @@ export class Game {
     ];
     if (r.rewinds) lines.push(el('div', { class: 'stat' }, el('span', { text: 'Rewinds' }), el('b', { text: `${r.rewinds} (free!)` })));
     if (out.threads) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Threads earned' }), el('b', { text: `+${out.threads}` })));
+    for (const id of out.opened) {
+      const l = ALL_LEVELS.find((x) => x.id === id);
+      if (l) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Now open' }), el('b', { class: 'name', text: l.name })));
+    }
+    const missed = el('div', { class: 'goals missed' });
+    for (const t of missedStars(level, r, out.mask)) {
+      missed.append(el('div', { class: 'goal' }, pixelCanvas(this.art.icons.star_empty, 2, 'px icon'), el('span', { text: t })));
+    }
     this.openModal(el('div', { class: `panel modal results ${won ? 'won' : 'lost'}` },
       el('h2', { text: won ? (level === ALL_LEVELS[ALL_LEVELS.length - 1] ? 'The Threads Are Whole!' : level.boss ? 'The Guardian Falls!' : 'Threads Rewoven!') : 'Fate Unravelled' }),
       won && level === ALL_LEVELS[ALL_LEVELS.length - 1] ? el('p', { class: 'flavor', text: 'Surtr\u2019s fire gutters out. The Wyrdlings are home, and the Norns weave on.' }) : null,
       stars,
+      missed.childElementCount ? missed : null,
       el('div', { class: 'stats' }, ...lines),
       won ? null : el('p', { class: 'flavor', text: 'No harm done. Rewind to where it went wrong, or watch Skuld’s Vision for one path that works.' }),
       this.row(buttons)));
@@ -473,6 +497,17 @@ export class Game {
       zoom.append(o);
     }
     zoom.addEventListener('change', () => { s.zoom = Number(zoom.value); this.p.zoomOffset = s.zoom; this.resize(); writeSave(this.save); });
+    const rewind = el('select', {});
+    for (const [v, t] of [['hold', 'Hold'], ['toggle', 'Toggle']] as const) {
+      const o = el('option', { value: v, text: t });
+      if (s.rewindToggle === (v === 'toggle')) o.selected = true;
+      rewind.append(o);
+    }
+    rewind.addEventListener('change', () => {
+      s.rewindToggle = rewind.value === 'toggle';
+      if (this.scene) this.scene.cfg.rewindToggle = s.rewindToggle;
+      writeSave(this.save);
+    });
     const done = el('button', { class: 'btn gold', text: 'Done' });
     const close = () => { writeSave(this.save); this.closeModal(); back?.(); };
     done.addEventListener('click', () => { audio.sfx('ui_click'); close(); });
@@ -493,6 +528,8 @@ export class Game {
       toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
       toggle('Tutorial hints', s.hints, (v) => { s.hints = v; }),
       el('label', { class: 'set' }, el('span', { text: 'Pixel zoom' }), zoom),
+      el('label', { class: 'set', title: 'Hold: rewind while R or the rewind button is held. Toggle: press once to start, again to stop.' },
+        el('span', { text: 'Rewind' }), rewind),
       el('div', { class: 'row' }, fs, reset),
       el('div', { class: 'row' }, done)), close);
   }
@@ -518,6 +555,22 @@ export class Game {
     this.modal = null;
     this.modalDismiss = null;
   }
+}
+
+/** Why each star this run did not earn was missed, e.g. 'Target 10: saved 8'. */
+function missedStars(level: LevelDef, r: PlayResult, mask: number): string[] {
+  const out: string[] = [];
+  const won = (mask & 1) === 1;
+  const lostBy = r.saved < level.quota ? 'the quota was missed' : 'the guardian still stands';
+  if (!won) {
+    if (r.saved < level.quota) out.push(`Quota ${level.quota}: saved ${r.saved}`);
+    if (r.bossDefeated === false) out.push('Guardian: still standing');
+  }
+  if (!(mask & 2)) out.push(r.saved < level.target ? `Target ${level.target}: saved ${r.saved}` : `Target ${level.target}: reached, but ${lostBy}`);
+  if (level.entities.some((e) => e.type === 'spindle') && !(mask & 4)) {
+    out.push(r.spindle ? `Golden Spindle: found, but ${lostBy}` : 'Golden Spindle: not collected');
+  }
+  return out;
 }
 
 function fmtTime(ticks: number): string {
