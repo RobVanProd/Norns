@@ -4,11 +4,14 @@ import { el, pixelCanvas } from './dom';
 
 export interface HudCallbacks {
   skill(s: SkillId): void;
+  /** the armed card's × */
+  disarm(): void;
   pause(): void;
   /** paused tick-stepping: +1 / -1 */
   step(n: number): void;
   speed(): void;
-  rewind(on: boolean): void;
+  /** rewind button pressed (true) or released (false); hold vs toggle is the scene's call */
+  rewind(down: boolean): void;
   foresight(): void;
   restart(): void;
   menu(): void;
@@ -29,6 +32,7 @@ export interface HudState {
   speed: number;
   foresight: boolean;
   rewinding: boolean;
+  rewindToggle: boolean;
   rewindSec: number;
   boss: { hp: number; max: number; name: string } | null;
   doomed: number;
@@ -96,14 +100,23 @@ export class Hud {
     for (const s of SKILLS) {
       if (available[s] === undefined) continue;
       const n = el('span', { class: 'count' });
+      // shown only on the armed card (see .skill.armed .x in style.css): the touch way to put a calling away
+      const x = el('span', { class: 'x', title: 'Put away (Esc or right-click)', text: '×' });
       const b = el('button', { class: 'skill', title: `${SKILL_INFO[s].name} (${SKILL_INFO[s].key}) — ${SKILL_INFO[s].desc}`, 'aria-label': SKILL_INFO[s].name },
-        icon(s, 3), n, el('span', { class: 'key', text: SKILL_INFO[s].key }), el('span', { class: 'sname', text: SKILL_INFO[s].name }));
-      b.addEventListener('click', (e) => { e.stopPropagation(); cb.skill(s); });
+        icon(s, 3), n, el('span', { class: 'key', text: SKILL_INFO[s].key }), el('span', { class: 'sname', text: SKILL_INFO[s].name }), x);
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.target === x && b.classList.contains('armed')) cb.disarm(); else cb.skill(s);
+      });
       bar.append(b);
       this.skillBtns.set(s, { b, n });
     }
-    this.rewindBtn = el('button', { class: 'rewind', title: "Hold to rewind (R) — Urðr's Memory", 'aria-label': 'Rewind' }, icon('rewind', 3), el('span', { class: 'rsec' }));
-    const start = (e: Event) => { e.preventDefault(); e.stopPropagation(); cb.rewind(true); };
+    this.rewindBtn = el('button', { class: 'rewind', title: 'Hold to rewind (R)', 'aria-label': 'Rewind' }, icon('rewind', 3), el('span', { class: 'rsec' }));
+    const start = (e: PointerEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      // only a touch or the left button: a right-click must not flip a toggled rewind
+      if (e.pointerType !== 'mouse' || e.button === 0) cb.rewind(true);
+    };
     const stop = (e: Event) => { e.preventDefault(); cb.rewind(false); };
     this.rewindBtn.addEventListener('pointerdown', start);
     this.rewindBtn.addEventListener('pointerup', stop);
@@ -181,6 +194,8 @@ export class Hud {
     this.eyeBtn.classList.toggle('on', s.foresight);
     this.pauseBtn.classList.toggle('on', s.paused);
     this.rewindBtn.classList.toggle('on', s.rewinding);
+    const rewindTitle = s.rewindToggle ? 'Rewind (R): press to start, again to stop' : 'Hold to rewind (R)';
+    if (this.rewindBtn.title !== rewindTitle) this.rewindBtn.title = rewindTitle;
     (this.rewindBtn.querySelector('.rsec') as HTMLElement).textContent = `${Math.floor(s.rewindSec)}s`;
     if (s.boss) {
       this.bossWrap.classList.add('show');

@@ -13,9 +13,12 @@ export interface InputHandlers {
   panEnd?(): void;
   zoom?(dir: 1 | -1): void;
   key?(code: string, down: boolean, repeat: boolean): void;
+  /** right mouse button pressed */
+  cancel?(): void;
 }
 
-interface Ptr { x: number; y: number; sx: number; sy: number; moved: boolean; touch: boolean; used: boolean }
+/** primary: a touch or the left button; only those tap (a right-click must never grant a calling) */
+interface Ptr { x: number; y: number; sx: number; sy: number; moved: boolean; touch: boolean; used: boolean; primary: boolean }
 
 export class Input {
   private ptrs = new Map<number, Ptr>();
@@ -50,7 +53,8 @@ export class Input {
     }, { passive: false });
     on('contextmenu', (e) => e.preventDefault());
     onW('keydown', (e) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      // form controls keep their own keys (arrows and Space work a <select>); Esc still reaches the game
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName) && e.code !== 'Escape') return;
       this.held.add(e.code);
       this.h.key?.(e.code, true, e.repeat);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
@@ -71,7 +75,9 @@ export class Input {
     const [x, y] = this.local(e);
     const touch = e.pointerType !== 'mouse';
     this.el.setPointerCapture?.(e.pointerId);
-    this.ptrs.set(e.pointerId, { x, y, sx: x, sy: y, moved: false, touch, used: false });
+    const primary = touch || e.button === 0;
+    this.ptrs.set(e.pointerId, { x, y, sx: x, sy: y, moved: false, touch, used: false, primary });
+    if (!touch && e.button === 2) this.h.cancel?.();
     if (this.ptrs.size === 2) {
       const [a, b] = [...this.ptrs.values()];
       this.pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
@@ -113,7 +119,7 @@ export class Input {
     const p = this.ptrs.get(e.pointerId);
     this.ptrs.delete(e.pointerId);
     if (!p || p.used) return;
-    if (!p.moved && this.ptrs.size === 0) this.h.tap?.(x, y, p.touch, p.sx, p.sy);
+    if (!p.moved && this.ptrs.size === 0 && p.primary) this.h.tap?.(x, y, p.touch, p.sx, p.sy);
     if (p.moved) this.h.panEnd?.();
     if (p.touch && this.ptrs.size === 0) this.h.leave?.();
   }

@@ -21,7 +21,7 @@ autonomy** — expressed as one power per Norn:
 |---|---|---|
 | **Skuld** (what shall be) | **Foresight** | Every Wyrdling's future path for the next few seconds is drawn as a dotted thread. Paths that end in death end in a red skull; paths that reach the gate end in a spark. With a skill armed, hovering a Wyrdling shows the *branched* future in gold and a live "+saved / −doomed" delta before you commit. |
 | **Verðandi** (what is becoming) | **Callings** | Assign skills; pause, slow and fast-forward time; plan while paused. |
-| **Urðr** (what has been) | **Rewind** | Hold to unspool time (up to 30 s). Mistakes cost seconds, not restarts. Never penalised. |
+| **Urðr** (what has been) | **Rewind** | Hold to unspool time, back as far as the start of the level (or set it to toggle: press to start, press again to stop). Mistakes cost seconds, not restarts. Never penalised. |
 
 All three rely on one property: **the simulation is fully deterministic and cheaply cloneable**
 (chunked copy-on-write terrain + plain-data state). Foresight is literally the real simulation
@@ -65,9 +65,14 @@ optional **Golden Spindle** collectible (third star).
 - **World map**: Yggdrasil, with realm branches — Midgard → Niflheim → Muspelheim.
 - Each realm: 4 puzzle levels, then a boss. Each level teaches one idea, then combines it.
 - **Stars**: ★ quota met, ★★ high target met, ★★★ Golden Spindle collected.
+- **Unlocks** never wait on a single level or on extra stars: clearing a level at quota opens the
+  next two in its realm; a boss needs three of its realm's puzzles cleared; the next realm opens
+  when the boss falls *or* every puzzle in the realm is cleared. Unlocks are keyed by level id and
+  stick once earned (`src/game/save.ts`), so adding a level to a realm never relocks a save.
 - **Threads** (currency) = saved Wyrdlings + star bonuses → spent at **the Loom** on upgrades
-  (longer foresight horizon, longer rewind buffer, cosmetic hoods). Every level is solvable
-  with no upgrades — the solution tests run on base stats.
+  (longer foresight horizon, cosmetic hoods). Every level is solvable with no upgrades — the
+  solution tests run on base stats. Rewind already reaches the first tick, so the old longer-rewind
+  upgrade (Urðr's Memory) is retired and refunded.
 
 ## Bosses
 
