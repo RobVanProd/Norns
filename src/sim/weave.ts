@@ -66,6 +66,10 @@ export function isStale(w: Weave, def: LevelDef): boolean {
   return w.v !== SIM_VERSION || w.level !== def.id || w.hash !== levelHash(def);
 }
 
+/**
+ * Records an attempt as it is played. When Rewind restores a snapshot, call rewind(tick) with its tick:
+ * record() refuses to write into the past without it.
+ */
 export class WeaveRecorder {
   readonly weave: Weave;
   constructor(def: LevelDef) {
@@ -232,13 +236,18 @@ export function decodeWeave(s: string): Weave | null {
   const b = fromBase64Url(m[2]);
   if (!b) return null;
   let p = 0;
+  const safe = (n: number): number => {
+    if (!Number.isSafeInteger(n)) throw new Error('number too large');
+    return n;
+  };
   const varint = (): number => {
     let n = 0, mul = 1;
     for (let k = 0; k < 8; k++) {
       if (p >= b.length) throw new Error('truncated');
       const c = b[p++];
       n += (c & 127) * mul;
-      if (c < 128) return n;
+      // past 2^53 the sum rounds; encodeWeave never writes such a number
+      if (c < 128) return safe(n);
       mul *= 128;
     }
     throw new Error('varint too long');
@@ -256,7 +265,7 @@ export function decodeWeave(s: string): Weave | null {
     const entries: WeaveEntry[] = [];
     let tick = 0;
     for (let i = 0; i < n; i++) {
-      tick += varint();
+      tick = safe(tick + varint());
       const id = varint();
       const skill = SKILLS[varint()];
       if (!skill) return null;
@@ -265,7 +274,7 @@ export function decodeWeave(s: string): Weave | null {
     const cut = varint();
     if (p !== b.length) return null;
     const w: Weave = { v: Number(m[1]), level, hash, entries };
-    if (cut > 0) w.cut = tick + cut - 1;
+    if (cut > 0) w.cut = safe(tick + cut - 1);
     return w;
   } catch {
     return null;

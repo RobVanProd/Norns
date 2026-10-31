@@ -148,6 +148,10 @@ describe('weave', () => {
     for (const bad of ['', '1', '1.', 'x.' + payload, '0.' + payload, '1.' + payload + 'A', '1.' + payload.slice(0, -2), '1.' + payload + '!', '1.' + payload.slice(0, -1) + '_']) {
       expect(decodeWeave(bad), JSON.stringify(bad)).toBeNull();
     }
+    // level "u5", hash 0, no entries, then the cut: 0 decodes, 2^55 (eight varint bytes) would round
+    const raw = (bytes: number[]) => `${SIM_VERSION}.${Buffer.from(bytes).toString('base64url')}`;
+    expect(decodeWeave(raw([2, 117, 53, 0, 0, 0]))).toEqual({ v: SIM_VERSION, level: 'u5', hash: 0, entries: [] });
+    expect(decodeWeave(raw([2, 117, 53, 0, 0, 128, 128, 128, 128, 128, 128, 128, 64]))).toBeNull();
     expect(() => encodeWeave({ ...w, entries: [w.entries[2], w.entries[0]] })).toThrow();
     expect(() => encodeWeave({ ...w, cut: 5 })).toThrow();
     expect(() => encodeWeave({ ...w, entries: [{ ...w.entries[0], x: 1.5 }] })).toThrow();

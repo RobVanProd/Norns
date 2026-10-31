@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_LEVELS } from '../src/levels';
 import { TICK_RATE } from '../src/sim/constants';
 import type { LevelDef, SolutionStep } from '../src/sim/level';
+import { SLEEP_TICKS } from '../src/sim/physics';
 import { LoopDetector, UNTIMED, hashData, sameData, settled, stateHash } from '../src/sim/settle';
 import { Sim } from '../src/sim/sim';
 import { SolutionPlayer } from '../src/sim/solution';
@@ -146,38 +147,13 @@ describe('loop detector', () => {
     }
   });
 
-  it('proves the m4, n1 and n2 null runs are loops too', () => {
-    for (const id of ['m4', 'n1', 'n2']) {
+  it('proves the m4, n1, n2, u1, u2 and u4 null runs are loops too', () => {
+    // these take one full period to prove; in u1, u2 and u4 the resting boulders must fall asleep first
+    for (const id of ['m4', 'n1', 'n2', 'u1', 'u2', 'u4']) {
       const r = watch(level(id), [], 30 * 60 * 3);
       expect(r.at, id).toBeGreaterThan(0);
+      if (r.sim.d.bodies.length) expect(r.sim.d.bodies.every((b) => b.sleep >= SLEEP_TICKS), `${id}: boulders asleep`).toBe(true);
       report(`${id} null run`, r);
-    }
-  });
-
-  it('stays silent on the u1, u2 and u4 null runs: a resting boulder jitters below a pixel forever', () => {
-    // Each resting boulder bobs up to 0.47 px and never falls asleep (its end-of-tick speed never drops
-    // under the sleep threshold), and float rounding means its exact position never repeats. In u1 and u4
-    // everything else does repeat; in u2 the walkers turn around against a boulder at a pixel that depends
-    // on its bob, so not even they settle into a cycle. Without a repeat there is no proof.
-    for (const id of ['u1', 'u2', 'u4']) {
-      const sim = Sim.create(level(id));
-      const det = new LoopDetector();
-      const rest = new Set<number>(), bodies = new Set<string>();
-      let restRepeats = false, bodiesRepeat = false, verdict = false;
-      while (sim.d.tick < 30 * 80) {
-        sim.step();
-        if (det.observe(sim) === 'loop') verdict = true;
-        if (sim.d.spawned < sim.total) continue;
-        const h = hashData({ ...sim.d, bodies: [] });
-        if (rest.has(h)) restRepeats = true;
-        rest.add(h);
-        const b = JSON.stringify(sim.d.bodies);
-        if (bodies.has(b)) bodiesRepeat = true;
-        bodies.add(b);
-      }
-      if (id !== 'u2') expect(restRepeats, `${id}: everything but the boulders repeats`).toBe(true);
-      expect(bodiesRepeat, `${id}: the boulders now repeat (do they sleep?): add ${id} to the levels that must prove a loop`).toBe(false);
-      expect(verdict, id).toBe(false);
     }
   });
 

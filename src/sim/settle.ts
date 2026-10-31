@@ -206,12 +206,13 @@ export interface LoopProof {
 }
 
 /**
- * Proves stalemates: call observe(sim) after every sim.step(). Every `stride` ticks it keeps an exact
- * copy of the state (an anchor), for `window` ticks; every tick it hashes the current state and, when
- * the hash matches an anchor's, compares the two exactly. Equal states whose tick difference is a
- * multiple of every tick period the step reads mean the step will map them to equal states again, tick
- * after tick: the future repeats forever, with no save, death or lasting change (the counters and the
- * terrain are part of the state), unless the player acts. A hash collision can never cause a verdict.
+ * Proves stalemates: call observe(sim) after every sim.step(), including each of several steps run in
+ * one frame. Every `stride` ticks it keeps an exact copy of the state (an anchor), for `window` ticks;
+ * every tick it hashes the current state and, when the hash matches an anchor's, compares the two
+ * exactly. Equal states whose tick difference is a multiple of every tick period the step reads mean
+ * the step will map them to equal states again, tick after tick: the future repeats forever, with no
+ * save, death or lasting change (the counters and the terrain are part of the state), unless the player
+ * acts. A hash collision can never cause a verdict.
  *
  * Comparing every tick against sparse anchors finds a loop one period plus at most one stride after it
  * begins, whatever its period; comparing only every `stride` ticks would need a common multiple of the
