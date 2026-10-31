@@ -20,7 +20,7 @@ Vitest.
 | Install | `npm ci` (Node `^20.19` or `>=22.12`; CI uses 22) |
 | Dev server | `npm run dev` → http://localhost:5173 (binds all interfaces) |
 | Typecheck | `npm run typecheck` |
-| Tests | `npm test` (about 5 s: sim, bosses, every level's solution, its steps and null run, view fit, slack report) |
+| Tests | `npm test` (about 15 s: sim, bosses, every level's solution, its steps and null run, view fit, the verdict's truth at every scripted calling, slack and design reports) |
 | Production build | `npm run build` → `dist/` |
 | Single-file build | `node scripts/artifact.mjs <out.html>` (everything inlined) |
 | Level preview PNG | `npm run level:png <id> [out.png] [--null] [--ticks N] [--scale 2] [--at T]` |
@@ -60,7 +60,9 @@ src/sim/        deterministic simulation. No DOM, no imports from outside src/si
   physics.ts      circle bodies (boulders), lava hardening
   sand.ts         falling-sand CA over active chunks
   boss.ts         boss patterns, projectiles, hazards (wyrm / jotunn / herald)
-  foresight.ts    ForesightJob: time-sliced clone-ahead prediction (Fate)
+  foresight.ts    ForesightJob: time-sliced clone-ahead prediction (Fate); VerdictJob: a branch run to its end
+  settle.ts       settled(), LoopDetector: proves "nothing more will happen unless you act"
+  weave.ts        the Weave: a versioned, encodable replay of one attempt (WeaveRecorder, Replayer)
   timeline.ts     rewind ring buffer of clones
   solution.ts     SolutionPlayer: replays a level's scripted SolutionStep[]
   rng.ts          seeded RNG, hashing, noise, dsin/dcos (deterministic trig)
@@ -68,12 +70,14 @@ src/levels/     level data (midgard.ts, niflheim.ts, muspelheim.ts), pad.ts, ind
 src/render/     pipeline.ts (low-res RTs, lighting, post), scale.ts (fitView), terrainLayer.ts
                 (terrain shader), layers.ts (parallax, liquids, particles), spriteBatch.ts, atlas.ts
 src/game/       game.ts (scenes, menus, URL params), play.ts (PlayScene: loop, camera, input,
-                foresight), view.ts (sim → sprites, effects), input.ts, save.ts, sound.ts
+                foresight, verdict, stalemate notice, Weave recording), view.ts (sim → sprites,
+                effects), input.ts, save.ts (progress, best Weaves), stats.ts (playtest log), sound.ts
 src/ui/         HUD (hud.ts), DOM helpers, style.css
 src/art/        procedural pixel art (px.ts toolkit, characters, bosses, materials, backgrounds)
 src/audio/      offline-synthesised instruments, sequencer, songs, SFX
 tests/          sim.test.ts, boss.test.ts, levels-<realm>.test.ts (level checks + slack report, via
-                helpers.ts), levels.test.ts, scale.test.ts, timeline.test.ts
+                helpers.ts), verdict-<realm>.test.ts (the verdict's truth, via verdict.ts),
+                design-report.test.ts, levels.test.ts, scale.test.ts, timeline.test.ts, and more
 docs/           ART_SPEC.md, AUDIO_SPEC.md, images/ (README screenshots)
 ```
 
@@ -144,6 +148,36 @@ Data flow per frame (`PlayScene.update` then `render`):
 5. Look at it in the browser: open `/?level=<id>&vision&go` to watch the solution, or
    `/?level=<id>&go` to play.
 
+## Level design rules
+
+These are the rules players of the genre judge levels by. Break one only on purpose, and say why in
+a comment next to the level.
+
+- **Puzzle first, execution second.** The hard part is seeing the plan, not clicking on the right
+  pixel. Walkers move 1 px a tick, so a click's window in ticks is its window in px. Give every
+  required click slack and state it; the slack report in `npm test` prints each click's window.
+- **Every scripted step is load-bearing**, tagged with the `purpose` it serves. *(Enforced.)*
+- **The null run fails and never collects the spindle.** Doing nothing must not win. *(Enforced.)*
+- **Nothing that matters is invisible while paused.** A pause shows every threat, gate state and
+  timer that decides the plan.
+- **Every hazard first appears where it is harmless**, and Foresight shows it before it can kill.
+- **No level timers.** Pressure comes from Wyrdlings walking, not from a clock.
+- **One idea per level, then combine.** Put it in the level's `idea` field (a few words, shown on
+  the intro card). Combination levels come after each part has had its own.
+- **No long single-Weaver stretches**, and a breather level after each boss.
+- **From mid-Niflheim on, triage:** more threats than the callings can fix one at a time.
+- **Sacrifices are allowed when Foresight labels them** ("1 lost · 3 saved later"), and greedy
+  Foresight traps only when the shown cost makes the trade-off visible.
+- **Every calling reappears in at least 3 later levels across at least 2 realms.**
+- **The verdict tells the truth about doing nothing more.** While paused, it says what the hovered
+  calling comes to with no further callings. In a single-decision teaching level that is an answer
+  key, which is fine there. Later levels need multi-step plans, where it truthfully says "not
+  enough yet" without solving the level.
+
+`tests/design-report.test.ts` prints the advisory side (scripted and spare callings, calling reuse,
+where each hazard first appears) with the other reports; run `npx vitest run --reporter=verbose` to
+see them. CI fails only on the enforced rules.
+
 ## Dev-only debug hooks
 
 These exist only in dev builds (`import.meta.env.DEV`). Production builds strip them.
@@ -157,7 +191,10 @@ These exist only in dev builds (`import.meta.env.DEV`). Production builds strip 
   - `debugCam = { x, y }` pins the camera; `null` releases it.
   - `solution`: set `new window.__norns.SolutionPlayer(scene.cfg.level.solution)` to script play
     mode.
-  - `armed` and `hoverPt` drive the calling and hover (for Foresight previews).
+  - `armed` and `hoverPt` drive the calling and hover (for Foresight previews and, while paused,
+    the verdict). `debugVerdictLog = {}` collects, per verdict, the frames and ms it took.
+  - In play mode every granted calling, scripted ones included, is recorded into the attempt's
+    Weave (`scene.weave`).
 - `window.__norns.manual(true)` stops the real-time loop. `window.__norns.step(dt)` then advances and
   renders exactly one frame of `dt` seconds. `scripts/trailer.mjs` films this way, so the simulation,
   particles and animation stay in true time however slow the browser is.
@@ -167,8 +204,8 @@ These exist only in dev builds (`import.meta.env.DEV`). Production builds strip 
     --do="300:const b = s.sim.d.boss; b.act = 'slam'; b.at = 0;"
   ```
 
-Save data is `localStorage['norns.save.v1']`. Delete it, or use Settings → Erase progress, to
-start fresh.
+Save data is `localStorage['norns.save.v1']`, the playtest log `localStorage['norns.stats.v1']`.
+Delete them, or use Settings → Erase progress (it erases both), to start fresh.
 
 ## Deployment and licensing
 

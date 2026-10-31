@@ -1,5 +1,5 @@
 // Scene manager + menus: title (with attract-mode demo), world map, level intro, results, pause,
-// the Loom (upgrades & hood dyes), settings.
+// the Loom (upgrades & hood dyes), settings. Also keeps the local playtest log (see stats.ts).
 import { audio, type SongId } from '../audio';
 import type { ArtBundle } from '../art/bundle';
 import { ALL_LEVELS, REALM_LIST } from '../levels';
@@ -7,11 +7,14 @@ import type { Pipeline } from '../render/pipeline';
 import { SKILLS, SKILL_INFO } from '../sim/constants';
 import type { LevelDef } from '../sim/level';
 import { SolutionPlayer } from '../sim/solution';
+import type { Weave } from '../sim/weave';
 import { clear, el, pixelCanvas } from '../ui/dom';
 import { PlayScene, type PlayMode, type PlayResult } from './play';
 import {
-  BOSS_NEEDS, HOODS, UPGRADES, isUnlocked, loadSave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave, type SaveData,
+  BOSS_NEEDS, HOODS, UPGRADES, bestWeave, isUnlocked, loadSave, offerWeave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave,
+  type SaveData,
 } from './save';
+import { eraseStats, levelStats, loadStats, logFinish, logQuit, playtestReport, writeStats, type QuitPoint, type Stats } from './stats';
 import { setHood } from './view';
 
 type Screen = 'title' | 'map' | 'play' | 'loom';
@@ -20,6 +23,9 @@ export class Game {
   readonly p: Pipeline;
   readonly art: ArtBundle;
   readonly save: SaveData;
+  private stats: Stats;
+  /** the play attempt on screen is in the playtest log already (it finished, or it was left) */
+  private attemptCounted = false;
   private ui: HTMLElement;
   private screenEl: HTMLElement;
   private modal: HTMLElement | null = null;
@@ -35,6 +41,7 @@ export class Game {
     this.art = art;
     this.ui = ui;
     this.save = loadSave();
+    this.stats = loadStats();
     setHood(this.save.hood);
     p.zoomOffset = this.save.settings.zoom;
     audio.setVolumes({ music: this.save.settings.music, sfx: this.save.settings.sfx });
@@ -49,6 +56,8 @@ export class Game {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.scene && this.screen === 'play' && this.scene.state === 'play' && !this.scene.paused) this.scene.togglePause();
     });
+    // closing the tab mid-level is a quit point too
+    window.addEventListener('pagehide', () => this.endAttempt('closed'));
     this.resize();
     const q = new URLSearchParams(location.search);
     const direct = ALL_LEVELS.find((l) => l.id === (q.get('level') ?? q.get('vision')));
@@ -131,14 +140,41 @@ export class Game {
     audio.playMusic(id);
   }
 
-  private startScene(level: LevelDef, mode: PlayMode): PlayScene {
+  /** The play attempt on screen ends (another scene replaces it, or the page closes): fold its counts
+   *  into the playtest log, and if it never finished, count it and note where it was left. An attempt
+   *  counts once begun: leaving from the intro card attempts nothing. */
+  private endAttempt(via: QuitPoint['via']): void {
+    const scene = this.scene;
+    if (!scene?.log || scene.state === 'intro') return;
+    const l = levelStats(this.stats, scene.cfg.level.id);
+    if (this.attemptCounted) {
+      scene.log.foldInto(l);
+      writeStats(this.stats);
+      return;
+    }
+    l.attempts++;
+    // counted once: a page closed after this (or hidden and back) is not a second quit
+    this.attemptCounted = true;
+    const d = scene.sim.d;
+    logQuit(this.stats, scene.cfg.level.id, scene.log, { tick: d.tick, saved: d.saved, used: d.used, via }, scene.weave);
+  }
+
+  private startScene(level: LevelDef, mode: PlayMode, replay?: Weave): PlayScene {
+    // what the player does instead says how the attempt on screen ended
+    const old = this.scene;
+    if (old?.log) this.endAttempt(mode === 'vision' ? 'vision' : mode === 'play' && old.cfg.level === level ? 'restart' : 'left');
     this.scene?.dispose();
     this.closeModal();
+    this.attemptCounted = false;
+    if (mode === 'vision' && !replay) {
+      levelStats(this.stats, level.id).visions++;
+      writeStats(this.stats);
+    }
     const s = this.save.settings;
     const scene = new PlayScene(this.p, this.art, {
-      level, mode,
+      level, mode, replay,
       horizonSec: UPGRADES.foresight.levels[this.save.upgrades.foresight],
-      foresight: s.foresight, hints: s.hints, rewindToggle: s.rewindToggle,
+      foresight: s.foresight, hints: s.hints, rewindToggle: s.rewindToggle, verdict: s.verdict,
     }, {
       finished: (r) => this.results(r),
       menu: () => this.pauseMenu(),
@@ -256,17 +292,18 @@ export class Game {
 
   // ------------------------------------------------------------------ play
 
-  playLevel(level: LevelDef, mode: PlayMode = 'play'): void {
+  /** Open a level: to play, or to watch Skuld's Vision (or, with `replay`, the player's own best Weave). */
+  playLevel(level: LevelDef, mode: PlayMode = 'play', replay?: Weave): void {
     this.screen = 'play';
     this.current = level;
     clear(this.screenEl);
-    const scene = this.startScene(level, mode);
+    const scene = this.startScene(level, mode, replay);
     this.music((level.boss ? 'boss' : level.music ?? level.realm) as SongId);
     audio.setIntensity(0);
     if (mode === 'vision') {
-      const stop = el('button', { class: 'btn small vision-stop', text: 'End Vision' });
+      const stop = el('button', { class: 'btn small vision-stop', text: replay ? 'Stop' : 'End Vision' });
       stop.addEventListener('click', () => this.playLevel(level));
-      this.screenEl.append(el('div', { class: 'vision-banner' }, el('span', { text: "Skuld's Vision — a path that works" }), stop));
+      this.screenEl.append(el('div', { class: 'vision-banner' }, el('span', { text: replay ? 'Your best weave, woven again' : "Skuld's Vision — a path that works" }), stop));
       return;
     }
     if (level.boss) audio.stinger('boss_intro');
@@ -293,10 +330,18 @@ export class Game {
       this.screenEl.append(go);
     });
     const mask = this.save.stars[level.id] ?? 0;
+    // the player's best run, if it still replays on this version of the level
+    const best = bestWeave(this.save, level);
+    let watch: HTMLButtonElement | null = null;
+    if (best) {
+      watch = el('button', { class: 'btn', text: 'Watch your best', title: `Saved ${best.saved} with ${best.used} calling${best.used === 1 ? '' : 's'}` });
+      watch.addEventListener('click', () => { audio.sfx('ui_click'); this.playLevel(level, 'vision', best.w); });
+    }
     this.openModal(el('div', { class: 'panel modal intro' },
       el('div', { class: 'kicker', text: `${realm?.name ?? ''} · ${level.boss ? 'Guardian' : `Thread ${idx + 1}`}` }),
       el('h2', { text: level.name }),
       el('p', { class: 'flavor', text: level.intro }),
+      level.idea ? el('p', { class: 'idea', text: level.idea }) : null,
       el('div', { class: 'goals' },
         el('div', { class: `goal${mask & 1 ? ' got' : ''}` }, pixelCanvas(this.art.icons[mask & 1 ? 'star' : 'star_empty'], 2, 'px icon'), el('span', { text: level.boss ? `Defeat the guardian, save ${level.quota}` : `Save ${level.quota} of ${level.wyrdlings}` })),
         el('div', { class: `goal${mask & 2 ? ' got' : ''}` }, pixelCanvas(this.art.icons[mask & 2 ? 'star' : 'star_empty'], 2, 'px icon'), el('span', { text: `Save ${level.target}` })),
@@ -305,7 +350,7 @@ export class Game {
           : null,
       ),
       skills,
-      el('div', { class: 'row' }, look, begin),
+      el('div', { class: 'row' }, look, watch, begin),
     ));
   }
 
@@ -313,14 +358,24 @@ export class Game {
     const level = this.current;
     if (!level || !this.scene) return;
     if (this.scene.cfg.mode === 'vision') {
-      this.openModal(el('div', { class: 'panel modal results' }, el('h2', { text: 'The Vision fades' }),
-        el('p', { text: `Skuld's path saved ${r.saved} of ${level.wyrdlings}. Now weave it yourself.` }),
-        this.row([['Try it', () => this.playLevel(level), true], ['Map', () => this.showMap()]])));
+      const own = this.scene.cfg.replay;
+      const text = own
+        ? `Your weave saved ${r.saved} of ${level.wyrdlings} with ${r.skillsUsed} calling${r.skillsUsed === 1 ? '' : 's'}${this.scene.replayDesync ? ', but it went out of step with the recording' : ''}.`
+        : `Skuld's path saved ${r.saved} of ${level.wyrdlings}. Now weave it yourself.`;
+      this.openModal(el('div', { class: 'panel modal results' }, el('h2', { text: own ? 'Woven again' : 'The Vision fades' }),
+        el('p', { text }),
+        this.row([[own ? 'Play' : 'Try it', () => this.playLevel(level), true], ['Map', () => this.showMap()]])));
       return;
     }
     const out = recordOutcome(this.save, {
       levelId: level.id, saved: r.saved, quota: level.quota, target: level.target, spindle: r.spindle, bossDefeated: r.bossDefeated,
     });
+    // recordOutcome wrote the save; a new best run is written with it
+    if (r.weave && offerWeave(this.save, level, r.weave, r)) writeSave(this.save);
+    const l = levelStats(this.stats, level.id);
+    if (!this.attemptCounted) l.attempts++;
+    this.attemptCounted = true;
+    if (this.scene.log) logFinish(this.stats, level.id, this.scene.log, (out.mask & 1) === 1, r.weave);
     const won = (out.mask & 1) === 1;
     audio.stinger(won ? 'victory' : 'defeat');
     if (won && level === ALL_LEVELS[ALL_LEVELS.length - 1]) setTimeout(() => audio.playMusic('finale'), 2500);
@@ -401,7 +456,7 @@ export class Game {
       ['Restart', () => this.playLevel(level)],
       ["Skuld's Vision", () => this.playLevel(level, 'vision')],
     ];
-    const finish = () => { scene.sim.finishNow(); this.closeModal(); if (scene.paused) scene.togglePause(); };
+    const finish = () => { this.closeModal(); scene.cutThreads(); };
     // ending is always possible: a stalled or doomed run should never need a restart from the menu
     if (scene.state === 'play') buttons.push(scene.sim.d.saved >= level.quota ? ['End level now', finish] : ['Cut the Threads (give up)', finish]);
     buttons.push(['Settings', () => this.settings(() => this.pauseMenu(true))], ['World map', () => this.showMap()]);
@@ -486,11 +541,11 @@ export class Game {
       i.addEventListener('input', () => f(Number(i.value) / 100));
       return el('label', { class: 'set' }, el('span', { text: label }), i);
     };
-    const toggle = (label: string, v: boolean, f: (v: boolean) => void) => {
+    const toggle = (label: string, v: boolean, f: (v: boolean) => void, title?: string) => {
       const i = el('input', { type: 'checkbox' });
       i.checked = v;
       i.addEventListener('change', () => f(i.checked));
-      return el('label', { class: 'set' }, el('span', { text: label }), i);
+      return el('label', { class: 'set', title }, el('span', { text: label }), i);
     };
     const zoom = el('select', {});
     for (const [v, t] of [[-1, 'Far'], [0, 'Normal'], [1, 'Close'], [2, 'Closer']] as const) {
@@ -521,18 +576,43 @@ export class Game {
       // two-step confirmation in the page itself (browser dialogs are not always available)
       if (!armed) { armed = true; reset.textContent = 'Tap again to erase'; audio.sfx('ui_deny'); return; }
       try { localStorage.removeItem('norns.save.v1'); } catch { /* ignore */ }
+      eraseStats();
+      // the page is going away: the attempt on screen must not write its stats back
+      this.scene = null;
       location.reload();
+    });
+    // the playtest log leaves the device only this way: copied, by the player, to paste where they like
+    const copy = el('button', { class: 'btn', text: 'Copy playtest report' });
+    const copied = el('textarea', { class: 'report', readonly: true, 'aria-label': 'Playtest report' });
+    copy.addEventListener('click', () => {
+      audio.sfx('ui_click');
+      const scene = this.scene;
+      if (scene?.log) scene.log.foldInto(levelStats(this.stats, scene.cfg.level.id));
+      writeStats(this.stats);
+      const text = playtestReport(this.stats, ALL_LEVELS, this.save.stars,
+        { w: window.innerWidth, h: window.innerHeight, touch: matchMedia('(any-pointer: coarse)').matches });
+      const show = (msg: string) => {
+        copy.textContent = msg;
+        // no clipboard (an insecure page, a refusal): show the text to copy by hand
+        if (msg !== 'Copied') { copied.value = text; copied.style.display = 'block'; copied.select(); }
+      };
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => show('Copied'), () => show('Select and copy below'));
+      else show('Select and copy below');
     });
     this.openModal(el('div', { class: 'panel modal settings' },
       el('h2', { text: 'Settings' }),
       slider('Music', s.music, (v) => { s.music = v; audio.setVolumes({ music: v }); }),
       slider('Sound', s.sfx, (v) => { s.sfx = v; audio.setVolumes({ sfx: v }); audio.sfx('ui_click'); }),
-      toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
       toggle('Tutorial hints', s.hints, (v) => { s.hints = v; }),
       el('label', { class: 'set' }, el('span', { text: 'Pixel zoom' }), zoom),
       el('label', { class: 'set', title: 'Hold: rewind while R or the rewind button is held. Toggle: press once to start, again to stop.' },
         el('span', { text: 'Rewind' }), rewind),
-      el('div', { class: 'row' }, fs, reset),
+      el('h3', { text: 'Assists' }),
+      toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
+      toggle('Verdict', s.verdict, (v) => { s.verdict = v; if (this.scene) this.scene.cfg.verdict = v; },
+        'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'),
+      el('div', { class: 'row' }, fs, copy, reset),
+      copied,
       el('div', { class: 'row' }, done)), close);
   }
 

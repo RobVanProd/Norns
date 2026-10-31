@@ -1,22 +1,32 @@
 // PlayScene: runs one level — fixed-step simulation, rewind timeline, foresight, input, camera,
-// HUD and view. Also powers attract mode and Skuld's Vision (scripted solution playback).
+// HUD and view. Also powers attract mode and Skuld's Vision (scripted solution playback, or the
+// player's own best Weave). In play mode it records the attempt as a Weave, watches for a proven
+// stalemate, and while paused weighs the hovered calling's verdict.
 import { audio } from '../audio';
 import type { ArtBundle } from '../art/bundle';
 import type { Pipeline } from '../render/pipeline';
 import { SKILLS, SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
 import { bossPhase } from '../sim/boss';
-import { ForesightJob, type Fate } from '../sim/foresight';
+import { ForesightJob, VerdictJob, type Calling, type Fate, type Verdict } from '../sim/foresight';
 import type { LevelDef } from '../sim/level';
+import { LoopDetector, type LoopProof } from '../sim/settle';
 import { Sim } from '../sim/sim';
 import { SolutionPlayer } from '../sim/solution';
 import { isAlive } from '../sim/state';
 import { Timeline } from '../sim/timeline';
-import { Hud } from '../ui/hud';
+import { Replayer, WeaveRecorder, type Weave } from '../sim/weave';
+import { Hud, type VerdictView } from '../ui/hud';
 import { Input } from './input';
 import { SoundMapper } from './sound';
+import { AttemptLog } from './stats';
 import { GameView } from './view';
 
 export type PlayMode = 'play' | 'attract' | 'vision';
+
+/** Plays callings into the run before each step: Skuld's scripted solution, or a recorded Weave. */
+interface Script {
+  apply(sim: Sim): ({ skill: SkillId; nth: number } | { skill: SkillId; id: number })[];
+}
 
 export interface PlayConfig {
   level: LevelDef;
@@ -26,6 +36,10 @@ export interface PlayConfig {
   hints: boolean;
   /** Rewind setting: false = runs while R / the button is held, true = press to start, press again to stop. */
   rewindToggle: boolean;
+  /** Assist: while paused, say what the hovered calling comes to if nothing more is done. */
+  verdict: boolean;
+  /** Vision mode: play this Weave (the player's own best) instead of Skuld's solution. */
+  replay?: Weave;
 }
 
 export interface PlayResult {
@@ -36,6 +50,8 @@ export interface PlayResult {
   ticks: number;
   skillsUsed: number;
   rewinds: number;
+  /** the attempt as played (play mode only) */
+  weave: Weave | null;
 }
 
 export interface PlayHooks {
@@ -51,6 +67,10 @@ const BOSS_NAMES: Record<string, string> = { wyrm: 'The Gnawing Wyrm', jotunn: '
 
 /** How far holding Q (or the touch button) projects the hovered Wyrdling's branch. */
 const PROJECT_SEC = 15;
+/** Frame time Foresight may use while paused (or on the intro card): base fate, branch and verdict share it. */
+const PAUSED_MS = 12;
+/** Verdict jobs kept half-done, so hovering back to a Wyrdling picks up where it left off. */
+const VERDICT_JOBS = 3;
 
 export class PlayScene {
   sim: Sim;
@@ -63,7 +83,21 @@ export class PlayScene {
   private input: Input | null = null;
   private hooks: PlayHooks;
   private sound = new SoundMapper();
-  private solution: SolutionPlayer | null = null;
+  private solution: Script | null = null;
+  /** the attempt so far, as a Weave (play mode only) */
+  private recorder: WeaveRecorder | null = null;
+  /** play-test counts for this attempt (play mode only; the Game folds them into the stats) */
+  readonly log: AttemptLog | null = null;
+  /** proves "nothing more will happen unless you act" (play mode only) */
+  private loops = new LoopDetector();
+  /** the proof whose notice the player closed */
+  private noticeClosed: LoopProof | null = null;
+  /** verdicts weighed since the last input (a calling, a restored snapshot): with none since, the future is fixed */
+  private verdicts = new Map<string, Verdict>();
+  private verdictJobs = new Map<string, VerdictJob>();
+  /** what the paused verdict is about right now (null: nothing to weigh) */
+  private verdictWant: { key: string; skill: SkillId; branch: boolean } | null = null;
+  private hoverKey = '';
   state: 'intro' | 'play' | 'done' = 'intro';
   paused = false;
   speed: 1 | 2 | 4 = 1;
@@ -111,8 +145,11 @@ export class PlayScene {
     this.timeline = new Timeline();
     this.timeline.record(this.sim);
     if (cfg.mode !== 'play') {
-      this.solution = new SolutionPlayer(cfg.level.solution);
+      this.solution = cfg.replay ? new Replayer(cfg.replay) : new SolutionPlayer(cfg.level.solution);
       this.state = 'play';
+    } else {
+      this.recorder = new WeaveRecorder(cfg.level);
+      this.log = new AttemptLog();
     }
     const e = this.sim.L.entrance;
     const boss = cfg.level.boss;
@@ -130,6 +167,8 @@ export class PlayScene {
         rewind: (down) => this.rewindInput(down),
         foresight: () => this.toggleForesight(),
         project: (on) => { this.projectTouch = on; },
+        cut: () => this.cutThreads(),
+        closeNotice: () => { this.noticeClosed = this.loops.loop; },
         restart: () => hooks.restart(),
         menu: () => hooks.menu(),
       });
@@ -289,9 +328,34 @@ export class PlayScene {
     } else {
       const prev = this.timeline.back(Math.max(0, this.sim.d.tick + n) + 1);
       if (!prev || prev.d.tick >= this.sim.d.tick) { audio.sfx('ui_deny'); return; }
-      this.sim = prev;
+      this.restore(prev);
     }
     this.forgetFate();
+  }
+
+  /** The run goes back to an earlier snapshot (Rewind, a step back, Rewind from the results). Callings
+   *  granted on or after its tick never happened: the Weave forgets them, and so do the verdicts. */
+  private restore(prev: Sim): void {
+    this.log?.rewound(this.sim.d.tick - prev.d.tick, this.time);
+    this.sim = prev;
+    this.recorder?.rewind(prev.d.tick);
+    this.loops.reset();
+    this.inputChanged();
+  }
+
+  /** A calling was granted or the run was set back: what was foreseen to the end no longer holds. */
+  private inputChanged(): void {
+    this.verdicts.clear();
+    this.verdictJobs.clear();
+  }
+
+  /** End the level now (Cut the Threads): the rest of the run is given up, and the Weave notes the tick. */
+  cutThreads(): void {
+    if (this.cfg.mode !== 'play' || this.state !== 'play' || this.sim.d.finished) return;
+    if (this.rewinding) this.setRewind(false);
+    this.recorder?.cut(this.sim);
+    this.sim.finishNow();
+    if (this.paused) this.togglePause();
   }
 
   /** One simulation tick with all its side effects: scripted solution, step, timeline, effects, sound. */
@@ -301,7 +365,11 @@ export class PlayScene {
       const applied = this.solution.apply(this.sim);
       if (applied.length) {
         const s = applied[applied.length - 1];
-        if (this.cfg.mode === 'vision') this.visionCaption = { text: `Skuld grants ${SKILL_INFO[s.skill].name.toUpperCase()}`, t: 2.2 };
+        const who = this.cfg.replay ? 'You grant' : 'Skuld grants';
+        if (this.cfg.mode === 'vision') this.visionCaption = { text: `${who} ${SKILL_INFO[s.skill].name.toUpperCase()}`, t: 2.2 };
+        // a scripted play mode (dev tooling) is still the player's attempt
+        for (const a of applied) this.recorder?.record(this.sim, 'nth' in a ? a.nth : a.id, a.skill);
+        if (this.recorder) { this.loops.reset(); this.inputChanged(); }
         const fresh = this.sim.events.slice(before);
         this.view.handleEvents(fresh, this.sim);
         if (sound && this.cfg.mode === 'vision') this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
@@ -309,6 +377,8 @@ export class PlayScene {
     }
     this.sim.step();
     this.timeline.record(this.sim);
+    // the stalemate proof needs every tick; Vision and attract runs never show it
+    if (this.cfg.mode === 'play') this.loops.observe(this.sim);
     this.view.handleEvents(this.sim.events, this.sim);
     if (sound && this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim.d.tick, this.camX, this.p.viewW);
   }
@@ -351,6 +421,8 @@ export class PlayScene {
     const id = held !== null && isAlive(this.sim.d.wyrds[held]) ? held
       : this.pick(pt.x, pt.y, touch) ?? (start ? this.pick(start.x, start.y, touch) : null);
     if (id === null) return;
+    // the pressed Wyrdling was lost on the way (it fell, it died): the grant goes to whoever is under the finger
+    if (held !== null && id !== held && this.armed && this.log) this.log.misgrants++;
     this.grant(id);
   }
 
@@ -363,7 +435,12 @@ export class PlayScene {
     // a calling lands on the moment on screen: stop rewinding first, or the rewind would run on and undo it
     if (this.rewinding) this.setRewind(false);
     const before = this.sim.events.length;
-    if (this.sim.assign(id, this.armed)) {
+    const skill = this.armed;
+    if (this.sim.assign(id, skill)) {
+      this.recorder?.record(this.sim, id, skill);
+      this.log?.grant(this.time);
+      this.loops.reset();
+      this.inputChanged();
       const fresh = this.sim.events.slice(before);
       this.view.handleEvents(fresh, this.sim);
       this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
@@ -440,7 +517,7 @@ export class PlayScene {
       if (target < this.sim.d.tick) {
         const prev = this.timeline.back(Math.max(0, target) + 1);
         if (!prev || prev.d.tick >= this.sim.d.tick) this.setRewind(false); // back at the start
-        else { this.rewindAcc -= this.sim.d.tick - prev.d.tick; this.sim = prev; }
+        else { this.rewindAcc -= this.sim.d.tick - prev.d.tick; this.restore(prev); }
       }
     } else if (this.state === 'play' && !this.paused && !this.debugHold && !this.sim.d.finished) {
       this.acc += dt * TICK_RATE * (this.cfg.mode === 'attract' ? 1 : this.speed);
@@ -454,14 +531,18 @@ export class PlayScene {
       if (this.acc > 4) this.acc = 0;
     }
     this.rewindFx += ((this.rewinding ? 1 : 0) - this.rewindFx) * Math.min(1, dt * 10);
+    if (this.log && this.state === 'play') this.log.sec += dt;
 
     // foresight
     if (this.cfg.mode === 'play' && this.cfg.foresight && !this.rewinding && this.state !== 'done') this.updateForesight();
-    else { this.fate = null; this.branch = null; }
+    else { this.fate = null; this.branch = null; this.verdictWant = null; }
 
     // hover
     const heldId = this.heldTarget !== null && isAlive(this.sim.d.wyrds[this.heldTarget]) ? this.heldTarget : null;
     this.hover = heldId ?? (this.hoverPt ? this.pick(this.hoverPt.x, this.hoverPt.y, this.hoverPt.touch) : null);
+    const hk = this.armed && this.hover !== null ? `${this.armed}:${this.hover}` : '';
+    if (hk && hk !== this.hoverKey && this.log) this.log.hovers++;
+    this.hoverKey = hk;
 
     // finish
     if (this.sim.d.finished && this.state === 'play') {
@@ -473,6 +554,7 @@ export class PlayScene {
         this.hooks.finished({
           saved: this.sim.d.saved, dead: this.sim.d.dead, spindle: this.sim.d.spindle,
           bossDefeated: b ? b.hp <= 0 : null, ticks: this.sim.d.tick, skillsUsed: this.sim.d.used, rewinds: this.rewinds,
+          weave: this.weave,
         });
       }
     }
@@ -509,10 +591,12 @@ export class PlayScene {
   private updateForesight(): void {
     const horizon = Math.round(this.cfg.horizonSec * TICK_RATE);
     const sim = this.sim;
-    // paused: plenty of frame time; running: a few ms per frame, never a hitch
-    const budget = this.debugFullForesight ? Infinity : this.paused || this.state === 'intro' ? 12 : 4;
+    // paused: plenty of frame time, shared by every job; running: a few ms per job, never a hitch
+    const paused = this.paused || this.state === 'intro';
+    const budget = this.debugFullForesight ? Infinity : paused ? PAUSED_MS : 4;
     const cost = this.debugForesightCost;
-    const t0 = cost ? performance.now() : 0;
+    const t0 = performance.now();
+    const left = () => (paused && budget !== Infinity ? budget - (performance.now() - t0) : budget);
     const stale = !this.fate || sim.d.tick - this.fate.from >= 6 || sim.d.tick < this.fate.from;
     if (stale && !this.fateJob) this.fateJob = new ForesightJob(sim, horizon);
     if (this.fateJob && this.fateJob.advance(budget)) {
@@ -528,7 +612,11 @@ export class PlayScene {
       const reach = far ? PROJECT_SEC * TICK_RATE : horizon;
       // another Wyrdling, calling or reach drops the job in flight; the last result stays up until the next one lands
       const key = `${this.armed}:${target}:${reach}`;
-      if (key !== this.branchKey) { this.branchKey = key; this.branchJob = null; }
+      if (key !== this.branchKey) {
+        this.branchKey = key;
+        this.branchJob = null;
+        if (this.log && !this.log.granted) this.log.previews++;
+      }
       const b = this.branch;
       const fresh = b && b.focus === target && b.skill === this.armed && b.horizon === reach && sim.d.tick >= b.from && sim.d.tick - b.from < 6;
       // a job runs to the end before the next starts, so a long projection still lands on a heavy level
@@ -537,7 +625,7 @@ export class PlayScene {
         // other Wyrdlings' changed threads stop at the usual horizon
         this.branchJob = new ForesightJob(sim, reach, { id: target, skill: this.armed }, { shadow: far, pathHorizon: horizon });
       }
-      if (this.branchJob && this.branchJob.advance(budget)) {
+      if (this.branchJob && left() > 0 && this.branchJob.advance(left())) {
         this.branch = this.branchJob.fate;
         this.branchJob = null;
       }
@@ -547,6 +635,60 @@ export class PlayScene {
       this.branchKey = '';
     }
     if (cost) cost.push(t1 - t0, performance.now() - t1);
+    this.updateVerdict(left);
+  }
+
+  /**
+   * The verdict: paused (or on the intro card) with a calling armed, run the hovered Wyrdling's branch on
+   * to its end, in time slices, assuming no further callings. With nobody hovered it weighs the run as it
+   * stands. With no new input the future is fixed, so results keep until the next calling or rewind: the
+   * do-nothing run holds at every tick, a branch at its own tick, and half-done jobs wait to be hovered again.
+   */
+  private updateVerdict(left: () => number): void {
+    const sim = this.sim, armed = this.armed;
+    const paused = this.paused || this.state === 'intro';
+    if (!this.cfg.verdict || !paused || !armed) { this.verdictWant = null; return; }
+    const target = this.hover;
+    const w = target !== null ? sim.d.wyrds[target] : undefined;
+    const branch = target !== null && !!w && sim.canAssign(w, armed);
+    const key = branch ? `${sim.d.tick}:${target}:${armed}` : 'base';
+    this.verdictWant = { key, skill: armed, branch };
+    if (this.verdicts.has(key)) return;
+    let job = this.verdictJobs.get(key);
+    if (!job) {
+      const calls: Calling[] = branch ? [{ id: target!, skill: armed }] : [];
+      job = new VerdictJob(sim, calls);
+      this.verdictJobs.set(key, job);
+      for (const k of this.verdictJobs.keys()) {
+        if (this.verdictJobs.size <= VERDICT_JOBS) break;
+        this.verdictJobs.delete(k);
+      }
+    }
+    // dev tooling counts every frame a verdict is waited for, also those with no time left for it
+    const log = this.debugVerdictLog ? (this.debugVerdictLog[key] ??= { frames: 0, ms: 0, ticks: 0, end: '' }) : null;
+    if (log) log.frames++;
+    const ms = left();
+    if (ms <= 0) return;
+    const t0 = performance.now();
+    const done = job.advance(ms);
+    if (log) {
+      log.ms += performance.now() - t0;
+      log.ticks = job.ticks;
+      if (done) log.end = job.result!.end;
+    }
+    if (done) {
+      this.verdicts.set(key, job.result!);
+      this.verdictJobs.delete(key);
+    }
+  }
+
+  /** What the HUD shows of the verdict: what it is about, and the outcome once weighed. */
+  private verdictView(): VerdictView | null {
+    const want = this.verdictWant;
+    if (!want) return null;
+    const lead = want.branch ? `With this ${SKILL_INFO[want.skill].name}, if you do nothing more:` : 'If you do nothing more:';
+    const v = this.verdicts.get(want.key);
+    return v ? { lead, busy: false, parts: verdictParts(v, this.cfg.level) } : { lead, busy: true, parts: [] };
   }
 
   /** Results screen → back into the level just before it ended, paused, so the player can keep rewinding.
@@ -555,7 +697,7 @@ export class PlayScene {
     if (this.state !== 'done') return false;
     const prev = this.timeline.back(this.sim.d.tick);
     if (!prev) return false;
-    this.sim = prev;
+    this.restore(prev);
     this.state = 'play';
     this.rewinds++;
     if (!this.paused) this.togglePause();
@@ -576,6 +718,24 @@ export class PlayScene {
   debugFullForesight = false;
   /** Dev tooling: when an array, each frame appends the ms its base and branch Foresight jobs took. */
   debugForesightCost: number[] | null = null;
+  /** Dev tooling: when an object, per verdict key the frames, ms and ticks its job took, and how it ended. */
+  debugVerdictLog: Record<string, { frames: number; ms: number; ticks: number; end: string }> | null = null;
+
+  /** The attempt so far, as a Weave (play mode only). */
+  get weave(): Weave | null {
+    return this.recorder ? structuredClone(this.recorder.weave) : null;
+  }
+
+  /** The Replayer's first mismatch with the recording, if this Vision replays a Weave and went out of step. */
+  get replayDesync(): boolean {
+    return this.solution instanceof Replayer && this.solution.desync !== null;
+  }
+
+  /** "Nothing more will happen unless you act": a stalemate is proven, and the player has not closed the notice. */
+  private get stalled(): boolean {
+    const proof = this.loops.loop;
+    return proof !== null && proof !== this.noticeClosed && this.state === 'play' && !this.rewinding && !this.sim.d.finished;
+  }
 
   render(): void {
     if (this.debugCam) { this.camX = this.debugCam.x; this.camY = this.debugCam.y; this.clampCam(); }
@@ -607,6 +767,7 @@ export class PlayScene {
         rewindSec: Math.max(0, (d.tick - this.timeline.oldestTick) / TICK_RATE),
         boss: b ? { hp: Math.max(0, b.hp), max: b.maxHp, name: BOSS_NAMES[b.kind] ?? b.kind } : null,
         doomed: this.fate?.dead ?? 0, horizon: this.cfg.horizonSec,
+        stalled: this.stalled, verdict: this.verdictView(),
       });
     }
   }
@@ -622,4 +783,19 @@ export class PlayScene {
       if (this.visionCaption.t <= 0) this.visionCaption = null;
     }
   }
+}
+
+/** A verdict against the level's goals, as the HUD shows it: [words, good / bad / neutral]. */
+function verdictParts(v: Verdict, level: LevelDef): [string, 'good' | 'bad' | ''][] {
+  const met = (ok: boolean): 'good' | 'bad' => (ok ? 'good' : 'bad');
+  const parts: [string, 'good' | 'bad' | ''][] = [
+    [`saves ${v.saved}`, ''],
+    [`quota ${level.quota} ${v.saved >= level.quota ? 'met' : 'not met'}`, met(v.saved >= level.quota)],
+    [`target ${level.target} ${v.saved >= level.target ? 'met' : 'not met'}`, met(v.saved >= level.target)],
+  ];
+  if (v.bossHp !== null) parts.push([v.bossHp === 0 ? 'the guardian falls' : 'the guardian stands', met(v.bossHp === 0)]);
+  if (level.entities.some((e) => e.type === 'spindle')) parts.push([v.spindle ? 'spindle found' : 'no spindle', met(v.spindle)]);
+  // no proof either way by the limit: say these are the counts then, not the end
+  if (v.end === 'cap') parts.push([`(still undecided at ${Math.floor(v.at / TICK_RATE / 60)}:${String(Math.floor(v.at / TICK_RATE) % 60).padStart(2, '0')})`, '']);
+  return parts;
 }

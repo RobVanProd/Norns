@@ -1,8 +1,32 @@
 // Skuld's Foresight: run the real simulation forward on a clone and record each wyrdling's fate.
-import type { SkillId } from './constants';
+// The verdict runs a branch on to its very end, to say what it comes to if the player does nothing more.
+import { TICK_RATE, type SkillId } from './constants';
+import { LoopDetector, settled } from './settle';
 import type { Sim } from './sim';
 import type { WyrdState } from './state';
 import { CS, CS_SHIFT } from './terrain';
+
+/** A calling a prediction grants: on `tick` (default: the tick it starts from), before that tick's step. */
+export interface Calling {
+  id: number;
+  skill: SkillId;
+  tick?: number;
+}
+
+/** Callings in the order they are due (a stable sort keeps same-tick ones in the given order). */
+function queue(callings: Calling | readonly Calling[] | undefined, from: number): Required<Calling>[] {
+  const list = callings === undefined ? [] : Array.isArray(callings) ? callings : [callings as Calling];
+  return list.map((c) => ({ id: c.id, skill: c.skill, tick: Math.max(from, c.tick ?? from) })).sort((a, b) => a.tick - b.tick);
+}
+
+/**
+ * Nothing is left that can change a count: every Wyrdling is saved, dead or gone, nobody is left to
+ * spawn and no rune burns. A standing Warden is settled for the simulation, which finishes 45 ticks
+ * later, but a hazard can still claim it in those ticks, so a run with one goes on to the finish.
+ */
+function over(c: Sim): boolean {
+  return c.d.finished || (settled(c) && !c.d.wyrds.some((w) => w.st === 'warden'));
+}
 
 export type FateKind = 'dead' | 'saved' | 'alive';
 
@@ -51,9 +75,9 @@ export interface Fate extends Baseline {
   blasts: number[];
   saved: number;
   dead: number;
-  /** the override assignment was accepted */
+  /** the focus' calling was accepted */
   applied: boolean;
-  /** the wyrdling given the override calling (-1 for a plain prediction) */
+  /** the wyrdling given the first override calling (-1 for a plain prediction) */
   focus: number;
   skill: SkillId | null;
   /** paths of everyone but the focus stop here (a projected branch follows only its own wyrdling further) */
@@ -110,23 +134,26 @@ export class ForesightJob {
   /** 4×4 px cells the focus worked in or blasted */
   private mask: Uint8Array | null = null;
   private runes: number[] = [];
+  /** callings still to grant, in tick order; the first one names the focus */
+  private calls: Required<Calling>[];
+  private next = 0;
   done = false;
 
-  constructor(sim: Sim, horizon: number, override?: { id: number; skill: SkillId }, opts: ForesightOptions = {}) {
+  /** `override`: the calling (or callings, the first naming the focus) this branch grants; none for a plain prediction. */
+  constructor(sim: Sim, horizon: number, override?: Calling | readonly Calling[], opts: ForesightOptions = {}) {
     this.c = sim.clone();
     this.sample = opts.sample ?? 2;
+    this.calls = queue(override, sim.d.tick);
+    const first = this.calls[0];
     this.fate = {
       from: sim.d.tick, horizon, paths: new Map(), ends: new Map(), bodies: new Map(), blasts: [], saved: 0, dead: 0, applied: false,
-      focus: override?.id ?? -1, skill: override?.skill ?? null, pathHorizon: Math.min(horizon, opts.pathHorizon ?? horizon), ghost: null, shadow: null,
+      focus: first?.id ?? -1, skill: first?.skill ?? null, pathHorizon: Math.min(horizon, opts.pathHorizon ?? horizon), ghost: null, shadow: null,
     };
     if (opts.shadow) {
       this.shadow = sim.clone();
       this.fate.shadow = { from: sim.d.tick, horizon, ends: new Map() };
     }
-    if (override) {
-      this.fate.applied = this.c.assign(override.id, override.skill);
-      if (this.fate.applied) this.startChunks = this.c.terrain.chunks.slice();
-    }
+    this.grant();
     watch(this.c, this.tracks);
     if (this.shadow) watch(this.shadow, this.shadowTracks);
     this.record();
@@ -150,14 +177,28 @@ export class ForesightJob {
     }
   }
 
+  /** Grant the callings due on the clone's current tick. */
+  private grant(): void {
+    const c = this.c;
+    while (this.next < this.calls.length && this.calls[this.next].tick <= c.d.tick) {
+      const k = this.calls[this.next++];
+      const ok = c.assign(k.id, k.skill);
+      if (this.next > 1) continue;
+      this.fate.applied = ok;
+      if (ok) this.startChunks = c.terrain.chunks.slice();
+    }
+  }
+
   /** Step the prediction until done or the time budget (ms) runs out. Returns true when complete. */
   advance(budgetMs = Infinity): boolean {
     if (this.done) return true;
     const fate = this.fate, c = this.c, sh = this.shadow;
     const start = budgetMs === Infinity ? 0 : performance.now();
     let prev = start;
-    while (this.t < fate.horizon && !(c.d.finished && (!sh || sh.d.finished))) {
+    // once nothing can change a fate (settled, or finished) the rest of the horizon would only repeat it
+    while (this.t < fate.horizon && !(this.next >= this.calls.length && over(c) && (!sh || over(sh)))) {
       const t = ++this.t;
+      this.grant();
       c.step();
       for (const e of c.events) {
         if (e.type === 'death' && e.id !== undefined && !fate.ends.has(e.id)) {
@@ -291,10 +332,113 @@ function finish(c: Sim, ends: Map<number, FateEnd>, tracks: Track[], horizon: nu
   }
 }
 
-export function foresee(sim: Sim, horizon: number, override?: { id: number; skill: SkillId }, sample = 2): Fate {
+export function foresee(sim: Sim, horizon: number, override?: Calling | readonly Calling[], sample = 2): Fate {
   const job = new ForesightJob(sim, horizon, override, { sample });
   job.advance();
   return job.fate;
+}
+
+// ------------------------------------------------------------------ the verdict
+
+/** The 8-minute limit a run is judged by. Runs that neither settle nor loop by then are judged there. */
+export const VERDICT_TICKS = TICK_RATE * 60 * 8;
+
+/** What a run comes to with no callings but the given ones. Every count is final unless `end` is 'cap'. */
+export interface Verdict {
+  /** tick the run was judged from */
+  from: number;
+  /** the first calling's Wyrdling and calling (-1 / null: no calling, the run as it stands) */
+  focus: number;
+  skill: SkillId | null;
+  /** the first calling was accepted */
+  applied: boolean;
+  /** 'settled': nothing left can change a count; 'loop': proven to repeat forever; 'cap': still undecided at `at` */
+  end: 'settled' | 'loop' | 'cap';
+  /** tick the run was judged at */
+  at: number;
+  saved: number;
+  dead: number;
+  spindle: boolean;
+  /** guardian's health left (null: no guardian) */
+  bossHp: number | null;
+}
+
+/**
+ * Runs a branch to its end in time slices: until it is over (see over()), the loop detector proves it
+ * repeats forever, or the 8-minute limit. Each case is exact, so the verdict is what really happens if
+ * the player grants these callings and nothing more (the limit aside, which the verdict names).
+ */
+export class VerdictJob {
+  result: Verdict | null = null;
+  private c: Sim;
+  private readonly from: number;
+  private readonly until: number;
+  private calls: Required<Calling>[];
+  private next = 0;
+  private applied = false;
+  private loops = new LoopDetector();
+
+  /** `until`: the tick to stop at if nothing settles (the 8-minute limit, or a minute on past it). */
+  constructor(sim: Sim, callings?: Calling | readonly Calling[], until = Math.max(VERDICT_TICKS, sim.d.tick + TICK_RATE * 60)) {
+    this.c = sim.clone();
+    this.from = sim.d.tick;
+    this.until = until;
+    this.calls = queue(callings, this.from);
+    this.grant();
+  }
+
+  /** Ticks simulated so far. */
+  get ticks(): number {
+    return this.c.d.tick - this.from;
+  }
+
+  private grant(): void {
+    const c = this.c;
+    while (this.next < this.calls.length && this.calls[this.next].tick <= c.d.tick) {
+      const k = this.calls[this.next++];
+      const ok = c.assign(k.id, k.skill);
+      if (this.next === 1) this.applied = ok;
+    }
+  }
+
+  /** Step until judged or the time budget (ms) runs out; true once `result` is set. */
+  advance(budgetMs = Infinity): boolean {
+    if (this.result) return true;
+    const c = this.c;
+    const start = budgetMs === Infinity ? 0 : performance.now();
+    let prev = start;
+    for (;;) {
+      const pending = this.next < this.calls.length;
+      if (!pending && over(c)) return this.judge('settled');
+      if (c.d.tick >= this.until) return this.judge('cap');
+      this.grant();
+      c.step();
+      // a loop proof is about the run without new input: callings still to come would break it
+      if (this.loops.observe(c) === 'loop' && this.next >= this.calls.length) return this.judge('loop');
+      if (budgetMs !== Infinity) {
+        const now = performance.now();
+        const tickMs = now - prev;
+        prev = now;
+        if (now - start + tickMs > budgetMs) return false;
+      }
+    }
+  }
+
+  private judge(end: Verdict['end']): true {
+    const d = this.c.d, first = this.calls[0];
+    this.result = {
+      from: this.from, focus: first?.id ?? -1, skill: first?.skill ?? null, applied: this.applied, end, at: d.tick,
+      saved: d.saved, dead: d.dead, spindle: d.spindle, bossHp: d.boss ? Math.max(0, d.boss.hp) : null,
+    };
+    return true;
+  }
+}
+
+/** Judge a run at once (tests, tools). */
+export function verdict(sim: Sim, callings?: Calling | readonly Calling[], until?: number): Verdict {
+  const job = new VerdictJob(sim, callings, until);
+  job.advance();
+  return job.result!;
 }
 
 /** How a branch's fates differ from its baseline's, over the ticks both cover. */

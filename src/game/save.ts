@@ -2,6 +2,7 @@
 // storage); every access is guarded and the game works without it.
 import { REALM_LIST, type RealmInfo } from '../levels';
 import type { LevelDef } from '../sim/level';
+import { decodeWeave, encodeWeave, isStale, type Weave } from '../sim/weave';
 
 export const HOODS: { id: string; name: string; hue: number | null; cost: number }[] = [
   { id: 'teal', name: 'Loom Teal', hue: null, cost: 0 },
@@ -20,6 +21,15 @@ export const UPGRADES = {
  *  refunded to old saves. */
 const RETIRED_REWIND_COSTS = [15, 35];
 
+/** The player's best run of a level: its encoded Weave (which carries the simulation version and the
+ *  level's hash) and what it achieved, to rank the next run against. */
+export interface BestWeave {
+  weave: string;
+  saved: number;
+  used: number;
+  ticks: number;
+}
+
 export interface SaveData {
   v: 1;
   stars: Record<string, number>;
@@ -30,8 +40,10 @@ export interface SaveData {
   hoods: string[];
   /** Ids of every level ever opened. Unlocks stick, so a level added to a realm later never relocks one. */
   opened: string[];
-  settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean };
+  settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean; verdict: boolean };
   seenIntro: boolean;
+  /** best run per level id ("Watch your best") */
+  weaves: Record<string, BestWeave>;
 }
 
 const KEY = 'norns.save.v1';
@@ -39,7 +51,8 @@ const KEY = 'norns.save.v1';
 function fresh(): SaveData {
   const s: SaveData = {
     v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
-    settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false }, seenIntro: false,
+    settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false, verdict: true }, seenIntro: false,
+    weaves: {},
   };
   refreshOpened(s);
   return s;
@@ -54,6 +67,7 @@ export function loadSave(): SaveData {
     const refund = RETIRED_REWIND_COSTS.slice(0, d.upgrades?.rewind ?? 0).reduce((a, b) => a + b, 0);
     const s = {
       ...f, ...d, threads: (d.threads ?? 0) + refund, stars: d.stars ?? {}, opened: Array.isArray(d.opened) ? d.opened : [],
+      weaves: d.weaves && typeof d.weaves === 'object' ? d.weaves : {},
       upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...d.settings },
     } as SaveData;
     // older saves have no opened list: pin down what their stars open today
@@ -160,4 +174,31 @@ export function recordOutcome(s: SaveData, o: Outcome): { mask: number; newMask:
   const opened = refreshOpened(s);
   writeSave(s);
   return { mask, newMask, threads, opened };
+}
+
+// ------------------------------------------------------------------ best Weave
+
+/** Better run first: more saved, then fewer callings, then fewer ticks. */
+function better(a: Omit<BestWeave, 'weave'>, b: Omit<BestWeave, 'weave'>): boolean {
+  if (a.saved !== b.saved) return a.saved > b.saved;
+  if (a.used !== b.used) return a.used < b.used;
+  return a.ticks < b.ticks;
+}
+
+/** The stored best run of a level, if it still replays: a Weave from another simulation version or
+ *  another shape of the level is ignored. */
+export function bestWeave(s: SaveData, def: LevelDef): (BestWeave & { w: Weave }) | null {
+  const b = s.weaves[def.id];
+  const w = b ? decodeWeave(b.weave) : null;
+  return b && w && !isStale(w, def) ? { ...b, w } : null;
+}
+
+/** Keep a finished run if it beats the stored best (or the stored one went stale). True if kept; the
+ *  caller writes the save. */
+export function offerWeave(s: SaveData, def: LevelDef, w: Weave, run: { saved: number; ticks: number }): boolean {
+  const cand = { saved: run.saved, used: w.entries.length, ticks: run.ticks };
+  const old = bestWeave(s, def);
+  if (old && !better(cand, old)) return false;
+  s.weaves[def.id] = { weave: encodeWeave(w), ...cand };
+  return true;
 }

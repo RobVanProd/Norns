@@ -101,6 +101,8 @@ export interface LevelDef {
   realm: RealmId;
   /** flavour line shown on the intro card */
   intro: string;
+  /** the one idea this level teaches or combines, in a few words (shown on the intro card; see AGENTS.md) */
+  idea?: string;
   /** one-line tips shown as the level begins (legible tutorialisation) */
   hints?: string[];
   width: number;
