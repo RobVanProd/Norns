@@ -63,6 +63,8 @@ export class Hud {
   private skillBtns = new Map<SkillId, { b: HTMLButtonElement; n: HTMLSpanElement }>();
   private name: HTMLDivElement;
   private outEl: HTMLSpanElement;
+  private comingEl: HTMLSpanElement;
+  private comingNum: HTMLSpanElement;
   private savedEl: HTMLSpanElement;
   private bar: HTMLDivElement;
   private barFill: HTMLDivElement;
@@ -87,6 +89,8 @@ export class Hud {
   private rewindTip: HTMLDivElement;
   private rewindTipTimer = 0;
   private icons: Record<string, HTMLCanvasElement>;
+  private topEl: HTMLDivElement;
+  private bottomEl: HTMLDivElement | null;
   private last = '';
 
   /** `readOnly` (Skuld's Vision): counters, quota bar, boss bar, pause and speed, and nothing to grant with. */
@@ -95,13 +99,17 @@ export class Hud {
     const icon = (k: string, s = 2) => pixelCanvas(icons[k], s, 'px icon');
     this.name = el('div', { class: 'hud-name' });
     this.outEl = el('span', { class: 'num' });
+    this.comingNum = el('span', { class: 'num' });
     this.savedEl = el('span', { class: 'num' });
     this.barFill = el('div', { class: 'qfill' });
     this.bar = el('div', { class: 'qbar' }, this.barFill, el('div', { class: 'qmark quota' }), el('div', { class: 'qmark target' }));
     this.spindleEl = el('div', { class: 'spindle-ind', title: 'Golden Spindle' }, icon('thread', 2));
+    // labelled, so the numbers read without the icons: "Out 3 · Coming 9", "Home 0/9" (compact on phones, see CSS)
+    const lbl = (text: string) => el('span', { class: 'lbl', text });
+    this.comingEl = el('span', { class: 'coming' }, el('span', { class: 'sep', text: '·' }), lbl('Coming'), this.comingNum);
     const counters = el('div', { class: 'counters panel' },
-      el('div', { class: 'ctr', title: 'Wyrdlings out / still to come' }, icon('wyrd', 2), this.outEl),
-      el('div', { class: 'ctr saved', title: 'Saved / needed' }, icon('gate', 2), this.savedEl, this.bar),
+      el('div', { class: 'ctr', title: 'Wyrdlings out now · still to come' }, icon('wyrd', 2), lbl('Out'), this.outEl, this.comingEl),
+      el('div', { class: 'ctr saved', title: 'Home through the gate / needed' }, icon('gate', 2), lbl('Home'), this.savedEl, this.bar),
       this.spindleEl,
     );
     const btn = (k: string, title: string, f: () => void) => {
@@ -125,6 +133,7 @@ export class Hud {
     this.bossWrap = el('div', { class: 'bossbar' }, this.bossName, el('div', { class: 'btrack' }, this.bossFill));
     this.fateEl = el('div', { class: 'fate' });
     const top = el('div', { class: 'hud-top' }, this.name, counters, controls);
+    this.topEl = top;
 
     const bar = el('div', { class: 'skillbar panel' });
     for (const s of SKILLS) {
@@ -189,12 +198,25 @@ export class Hud {
     this.rewindTip = el('div', { class: 'rewind-tip', role: 'status' }, icon('rewind', 2), el('span'));
     const notes = el('div', { class: 'hud-notes' }, this.rewindTip, this.armedEl);
     const bottom = el('div', { class: 'hud-bottom' }, bar, this.rewindBtn, this.projectBtn);
+    this.bottomEl = readOnly ? null : bottom;
     this.root = readOnly
       ? el('div', { class: 'hud read-only' }, top, this.bossWrap)
       : el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, this.noticeEl, this.verdictEl, notes, bottom);
     // HUD panels swallow pointer events so taps on buttons don't reach the world
     for (const p of [top, bottom, this.bossWrap, this.noticeEl]) p.addEventListener('pointerdown', (e) => e.stopPropagation());
     parent.append(this.root);
+  }
+
+  /** CSS px the top and bottom bars cover at the screen's edges (the view pins what they would hide): the
+   *  bottom counts the notes over the skill bar (the armed calling, the Rewind lesson) while they show. */
+  insets(): { top: number; bottom: number } {
+    const top = Math.max(0, this.topEl.getBoundingClientRect().bottom);
+    let y = Infinity;
+    for (const e of this.bottomEl ? [this.bottomEl, this.armedEl, this.rewindTip] : []) {
+      const r = e.getBoundingClientRect();
+      if (r.height > 0) y = Math.min(y, r.top);
+    }
+    return { top, bottom: y === Infinity ? 0 : Math.max(0, window.innerHeight - y) };
   }
 
   /** A line in the hint box for `seconds`; a `lesson` (an onboarding moment) is drawn a little louder. */
@@ -266,7 +288,9 @@ export class Hud {
     if (key === this.last) return;
     this.last = key;
     this.name.textContent = s.name;
-    this.outEl.textContent = `${s.out}${s.toCome ? `+${s.toCome}` : ''}`;
+    this.outEl.textContent = String(s.out);
+    this.comingNum.textContent = String(s.toCome);
+    this.comingEl.style.display = s.toCome ? '' : 'none';
     this.savedEl.textContent = `${s.saved}/${s.quota}`;
     this.savedEl.classList.toggle('met', s.saved >= s.quota);
     this.barFill.style.width = `${Math.min(100, (s.saved / s.total) * 100)}%`;

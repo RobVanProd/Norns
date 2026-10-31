@@ -40,7 +40,8 @@ export interface SaveData {
   hoods: string[];
   /** Ids of every level ever opened. Unlocks stick, so a level added to a realm later never relocks one. */
   opened: string[];
-  settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean; verdict: boolean };
+  /** palette: fate colours, 'classic' red / green or 'cvd' blue / orange (see setPalette in view.ts) */
+  settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean; verdict: boolean; palette: 'classic' | 'cvd' };
   seenIntro: boolean;
   /** best run per level id ("Watch your best") */
   weaves: Record<string, BestWeave>;
@@ -66,7 +67,7 @@ function legacyOpened(stars: Record<string, number>): string[] {
 function fresh(): SaveData {
   const s: SaveData = {
     v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
-    settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false, verdict: true }, seenIntro: false,
+    settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false, verdict: true, palette: 'classic' }, seenIntro: false,
     weaves: {}, seen: [], visionTier: {},
   };
   refreshOpened(s);

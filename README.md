@@ -72,8 +72,10 @@ for a second star, and find the Golden Spindle for a third.
   <img src="docs/images/foresight.png" alt="Foresight preview: a Weaver is armed and hovering a Wyrdling at a gorge edge; a golden thread shows the bridge it would build and the label reads -2 lost" width="854">
 </p>
 
-- **Skuld's Foresight.** Dotted threads show every Wyrdling's next few seconds. A red skull
-  marks a death, a spark marks a rescue, and the HUD counts how many are doomed. Arm a calling
+- **Skuld's Foresight.** Threads show every Wyrdling's next few seconds, patterned by fate: dashes
+  to a skull for a death, diamonds to a spark for a rescue, dots for neither. A death off screen or
+  under the HUD is pinned to the nearest edge, and the HUD counts how many are doomed. Settings →
+  Fate colours swaps red / green for blue / orange. Arm a calling
   and hover a Wyrdling (on touch, press and hold) to see the branched future before you commit.
   Above, granting Weaver at the gorge edge would leave 2 fewer Wyrdlings lost, so the label is
   green.
@@ -105,6 +107,7 @@ deterministic, so Foresight also predicts exactly who an attack will hit.
 |---|---|---|
 | Choose a calling | click the bar, or press `1`–`9` | tap the bar |
 | Grant it | press on a Wyrdling (it applies the moment you click) | tap a Wyrdling; press and hold to preview its fate first |
+| Choose among overlapping Wyrdlings (the outlined one gets it; ×N says how many) | `Tab` / `Shift`+`Tab` while pointing at them | tap the crowd, tap again for the next one, then hold a finger on it to grant |
 | Put the calling away | `Esc` or right-click | tap the × on the armed calling |
 | Pan | drag empty space, arrow keys or WASD, mouse wheel | drag |
 | Zoom | `+` / `-`, or Ctrl + wheel | pinch |

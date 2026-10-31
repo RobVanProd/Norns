@@ -7,18 +7,19 @@ export interface InputHandlers {
   press?(x: number, y: number, touch: boolean): void;
   /** mouse press: act immediately; return true if consumed (that press then never pans or taps) */
   act?(x: number, y: number): boolean;
-  /** release without dragging; (sx, sy) is where the press started */
-  tap?(x: number, y: number, touch: boolean, sx: number, sy: number): void;
+  /** release without dragging; (sx, sy) is where the press started, `ms` how long it was held */
+  tap?(x: number, y: number, touch: boolean, sx: number, sy: number, ms: number): void;
   pan?(dx: number, dy: number): void;
   panEnd?(): void;
   zoom?(dir: 1 | -1): void;
-  key?(code: string, down: boolean, repeat: boolean): void;
+  /** true: the key was the game's (its browser default, e.g. Tab moving focus, is prevented) */
+  key?(code: string, down: boolean, repeat: boolean): boolean | void;
   /** right mouse button pressed */
   cancel?(): void;
 }
 
 /** primary: a touch or the left button; only those tap (a right-click must never grant a calling) */
-interface Ptr { x: number; y: number; sx: number; sy: number; moved: boolean; touch: boolean; used: boolean; primary: boolean }
+interface Ptr { x: number; y: number; sx: number; sy: number; moved: boolean; touch: boolean; used: boolean; primary: boolean; t0: number }
 
 export class Input {
   private ptrs = new Map<number, Ptr>();
@@ -56,8 +57,8 @@ export class Input {
       // form controls keep their own keys (arrows and Space work a <select>); Esc still reaches the game
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName) && e.code !== 'Escape') return;
       this.held.add(e.code);
-      this.h.key?.(e.code, true, e.repeat);
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+      const used = this.h.key?.(e.code, true, e.repeat) === true;
+      if (used || ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
     });
     onW('keyup', (e) => {
       this.held.delete(e.code);
@@ -76,7 +77,7 @@ export class Input {
     const touch = e.pointerType !== 'mouse';
     this.el.setPointerCapture?.(e.pointerId);
     const primary = touch || e.button === 0;
-    this.ptrs.set(e.pointerId, { x, y, sx: x, sy: y, moved: false, touch, used: false, primary });
+    this.ptrs.set(e.pointerId, { x, y, sx: x, sy: y, moved: false, touch, used: false, primary, t0: e.timeStamp });
     if (!touch && e.button === 2) this.h.cancel?.();
     if (this.ptrs.size === 2) {
       const [a, b] = [...this.ptrs.values()];
@@ -119,7 +120,7 @@ export class Input {
     const p = this.ptrs.get(e.pointerId);
     this.ptrs.delete(e.pointerId);
     if (!p || p.used) return;
-    if (!p.moved && this.ptrs.size === 0 && p.primary) this.h.tap?.(x, y, p.touch, p.sx, p.sy);
+    if (!p.moved && this.ptrs.size === 0 && p.primary) this.h.tap?.(x, y, p.touch, p.sx, p.sy, e.timeStamp - p.t0);
     if (p.moved) this.h.panEnd?.();
     if (p.touch && this.ptrs.size === 0) this.h.leave?.();
   }

@@ -29,7 +29,7 @@ Vitest.
 | Browser smoke test | `npm run smoke <outDir> [baseUrl]` (exits 1 on any page error) |
 | Exact-tick screenshots | `node scripts/frames.mjs <url> <outDir> <w> <h> <ticks> [options]` (see the file header) |
 | Contact sheet | `python3 scripts/sheet.py out.png <cols> <scale> <images...>` |
-| Click reliability | `node scripts/clicktest.mjs <baseUrl> [level] [drift] [body\|hood]` |
+| Click reliability | `node scripts/clicktest.mjs <baseUrl> [level] [drift] [body\|hood] [single\|crowd] [mouse\|touch]` |
 | Trailer | `node scripts/trailer.mjs <devServerUrl> [workDir] [out.mp4]` (needs ffmpeg; about 4 min) |
 | Audio render check | `node scripts/audio-check.mjs --url <devServerUrl>` (flags silence, clipping, NaNs) |
 
@@ -48,7 +48,9 @@ Scripts marked "dev server" need `npm run dev` (or `npx vite --port <p>`) runnin
    force a boss attack with `--do=TICK:js`), and run `npm run smoke` for page errors. Unit tests
    do not see pixels.
 4. If you touched input, run `scripts/clicktest.mjs`. Clicks on walking Wyrdlings should
-   assign 12/12, including with cursor drift.
+   assign 12/12, including with cursor drift, and in `crowd` mode (5-7 overlapping Wyrdlings, the
+   intended one chosen by Tab or repeat taps) 12/12 grants should reach the intended one, on `mouse`
+   and `touch`.
 
 ## Architecture
 
@@ -206,6 +208,7 @@ These exist only in dev builds (`import.meta.env.DEV`). Production builds strip 
     the verdict). `debugVerdictLog = {}` collects, per verdict, the frames and ms it took.
   - In play mode every granted calling, scripted ones included, is recorded into the attempt's
     Weave (`scene.weave`).
+- `window.__norns.palette('cvd' | 'classic')` switches the fate colours, as Settings → Fate colours does.
 - `window.__norns.manual(true)` stops the real-time loop. `window.__norns.step(dt)` then advances and
   renders exactly one frame of `dt` seconds. `scripts/trailer.mjs` films this way, so the simulation,
   particles and animation stay in true time however slow the browser is.

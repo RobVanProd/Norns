@@ -17,10 +17,11 @@ import { isAlive } from '../sim/state';
 import { Timeline } from '../sim/timeline';
 import { Replayer, WeaveRecorder, type Weave } from '../sim/weave';
 import { Hud, type VerdictView } from '../ui/hud';
+import { ambiguous, candidates, cycleSet, nextInCycle, type Candidate } from './crowd';
 import { Input } from './input';
 import { SoundMapper } from './sound';
 import { AttemptLog } from './stats';
-import { GameView, type MarkView } from './view';
+import { GameView, type Insets, type MarkView } from './view';
 import { lingerTicks, planVision, playedMarks, shownMarks, visionRoute, type VisionMark, type VisionTier } from './vision';
 
 export type PlayMode = 'play' | 'attract' | 'vision';
@@ -106,6 +107,8 @@ const PROJECT_SEC = 15;
 const PAUSED_MS = 12;
 /** Verdict jobs kept half-done, so hovering back to a Wyrdling picks up where it left off. */
 const VERDICT_JOBS = 3;
+/** A touch held this long (ms) grants; a quicker tap on a crowd chooses among it instead. */
+const HOLD_MS = 300;
 
 export class PlayScene {
   sim: Sim;
@@ -141,6 +144,16 @@ export class PlayScene {
   private hoverPt: { x: number; y: number; touch: boolean } | null = null;
   /** Touch: the Wyrdling a held finger pressed (preview follows it; release grants to it). */
   private heldTarget: number | null = null;
+  /** Crowd cycling: the Wyrdling chosen among several under the pointer (Tab, or a quick tap on a crowd).
+   *  A cursor's choice holds while the Wyrdling stays under it; a finger's stays outlined until the next tap. */
+  private choice: { id: number; touch: boolean } | null = null;
+  /** how many a click at the pointer chooses between (the ×N over the aimed Wyrdling) */
+  private crowd = 0;
+  /** CSS px the HUD covers at each screen edge, re-measured every so often (null: measure now) and when the
+   *  armed calling (whose note sits over the skill bar) changes */
+  private insets: Insets | null = null;
+  private insetsAge = 0;
+  private insetsArmed: SkillId | null = null;
   private fate: Fate | null = null;
   private branch: Fate | null = null;
   private branchKey = '';
@@ -327,7 +340,7 @@ export class PlayScene {
         if (touch) this.heldTarget = this.pick(this.hoverPt.x, this.hoverPt.y, true);
       },
       act: (x, y) => this.act(this.p.screenToWorld(x, y, this.dpr)),
-      tap: (x, y, touch, sx, sy) => this.tap(this.p.screenToWorld(x, y, this.dpr), touch, this.p.screenToWorld(sx, sy, this.dpr)),
+      tap: (x, y, touch, sx, sy, ms) => this.tap(this.p.screenToWorld(x, y, this.dpr), touch, this.p.screenToWorld(sx, sy, this.dpr), ms),
       pan: (dx, dy) => {
         this.heldTarget = null;
         this.camX += (dx * this.dpr) / this.p.scale;
@@ -348,7 +361,8 @@ export class PlayScene {
     };
   }
 
-  private key(code: string, down: boolean, repeat: boolean): void {
+  /** True when the key is the game's (Tab then never moves the page's focus). */
+  private key(code: string, down: boolean, repeat: boolean): boolean | void {
     if (this.cfg.mode !== 'play') {
       // the Vision's read-only HUD: pause and speed, and Esc for the menu
       if (!down || repeat) return;
@@ -365,6 +379,10 @@ export class PlayScene {
     // key repeat must not restart a rewind that stopped at the first tick (or flip a toggle)
     if (code === 'KeyR' || code === 'Backspace') { if (!repeat) this.rewindInput(down); return; }
     if (code === 'KeyQ') { this.projectKey = down; return; }
+    if (code === 'Tab') {
+      if (down) this.cycle(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? -1 : 1);
+      return true;
+    }
     if (!down || repeat) return;
     const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(code);
     if (idx >= 0) {
@@ -528,23 +546,53 @@ export class PlayScene {
     if (sound && this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim.d.tick, this.camX, this.p.viewW);
   }
 
+  /** The living Wyrdlings under world (wx, wy), best first (see crowd.ts). */
+  private under(wx: number, wy: number, touch: boolean): Candidate[] {
+    const armed = this.armed;
+    return candidates(this.sim.d.wyrds, wx, wy, touch, (w) => (armed ? this.sim.canAssign(w, armed) : true));
+  }
+
+  /** Who a click or tap at world (wx, wy) hits: the one chosen by cycling while it is still under the
+   *  pointer, else the best candidate. */
   private pick(wx: number, wy: number, touch: boolean): number | null {
-    const r = touch ? 12 : 7;
-    let best: number | null = null, bestScore = Infinity;
-    for (const w of this.sim.d.wyrds) {
-      if (!isAlive(w)) continue;
-      // distance to the sprite's body (a vertical capsule from hood to feet), with a little slack
-      // behind a walker: the click aims at where it was a moment ago
-      let dx = wx - w.x;
-      if (w.st === 'walk' && dx * w.dir < 0) dx = Math.sign(dx) * Math.max(0, Math.abs(dx) - 3);
-      const dy = wy < w.y - 13 ? wy - (w.y - 13) : wy > w.y - 2 ? wy - (w.y - 2) : 0;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      if (d > r) continue;
-      const ok = this.armed ? this.sim.canAssign(w, this.armed) : true;
-      const score = d - (ok ? 6 : 0);
-      if (score < bestScore) { bestScore = score; best = w.id; }
+    const c = this.under(wx, wy, touch);
+    const ch = this.choice;
+    if (ch && c.some((k) => k.id === ch.id)) return ch.id;
+    return c[0]?.id ?? null;
+  }
+
+  /** Tab / Shift+Tab: the next (or previous) of the Wyrdlings under the pointer becomes the one a click hits. */
+  private cycle(dir: 1 | -1): void {
+    const pt = this.hoverPt;
+    if (!pt || this.state === 'done') return;
+    const id = nextInCycle(cycleSet(this.under(pt.x, pt.y, pt.touch)), this.hover, dir);
+    if (id === null || id === this.hover) return;
+    this.choice = { id, touch: false };
+    this.hover = id;
+    audio.sfx('ui_hover');
+  }
+
+  /** A quick tap on several that could take the calling, about as near the finger as each other: the first
+   *  tap chooses the best of them, a repeat tap on the same crowd the next one; holding a finger on the chosen
+   *  one grants. False: no such crowd here (the tap grants as usual). */
+  private chooseInCrowd(pt: { x: number; y: number }, held: number | null): boolean {
+    const c = this.under(pt.x, pt.y, true);
+    const set = cycleSet(c);
+    if (set.length < 2) return false;
+    const ch = this.choice;
+    let id: number | null;
+    if (ch?.touch && set.includes(ch.id)) id = nextInCycle(set, ch.id, 1);
+    else {
+      // one clearly nearest the finger is the one meant
+      if (!ambiguous(c)) return false;
+      id = held !== null && set.includes(held) ? held : (c.find((k) => k.ok) ?? c[0]).id;
+      this.hud?.hint(`${set.length} here: tap again for the next one, hold a finger on it to grant.`, 3);
     }
-    return best;
+    if (id === null) return false;
+    this.choice = { id, touch: true };
+    this.hover = id;
+    audio.sfx('ui_hover');
+    return true;
   }
 
   /** Mouse press: assign straight away when it lands on a Wyrdling. */
@@ -557,14 +605,18 @@ export class PlayScene {
     return true;
   }
 
-  private tap(pt: { x: number; y: number }, touch: boolean, start?: { x: number; y: number }): void {
+  private tap(pt: { x: number; y: number }, touch: boolean, start?: { x: number; y: number }, ms = 0): void {
     if (this.cfg.mode !== 'play' || this.state === 'done') return;
     audio.unlock();
     if (this.state === 'intro') this.begin();
     const held = this.heldTarget;
     this.heldTarget = null;
+    // a quick tap on a crowd chooses who (a repeat tap the next one) instead of granting to a guess
+    if (touch && this.armed && ms < HOLD_MS && this.chooseInCrowd(start ?? pt, held !== null && isAlive(this.sim.d.wyrds[held]) ? held : null)) return;
     const id = held !== null && isAlive(this.sim.d.wyrds[held]) ? held
       : this.pick(pt.x, pt.y, touch) ?? (start ? this.pick(start.x, start.y, touch) : null);
+    // a tap away from the chosen crowd lets the choice go
+    if (touch) this.choice = null;
     if (id === null) return;
     // the pressed Wyrdling was lost on the way (it fell, it died): the grant goes to whoever is under the finger
     if (held !== null && id !== held && this.armed && this.log) this.log.misgrants++;
@@ -582,6 +634,7 @@ export class PlayScene {
     const before = this.sim.events.length;
     const skill = this.armed;
     if (this.sim.assign(id, skill)) {
+      this.choice = null;
       this.recorder?.record(this.sim, id, skill);
       this.log?.grant(this.time);
       this.loops.reset();
@@ -615,6 +668,7 @@ export class PlayScene {
     this.dpr = dpr;
     this.p.resize(w, h, dpr);
     this.clampCam();
+    this.insets = null;
   }
 
   private clampCam(): void {
@@ -691,7 +745,16 @@ export class PlayScene {
 
     // hover (before Foresight and the verdict, so both are about this frame's Wyrdling)
     const heldId = this.heldTarget !== null && isAlive(this.sim.d.wyrds[this.heldTarget]) ? this.heldTarget : null;
-    this.hover = heldId ?? (this.hoverPt ? this.pick(this.hoverPt.x, this.hoverPt.y, this.hoverPt.touch) : null);
+    let hover = heldId ?? (this.hoverPt ? this.pick(this.hoverPt.x, this.hoverPt.y, this.hoverPt.touch) : null);
+    // a cursor's choice lapses once its Wyrdling is out from under it; a finger's stays outlined after the
+    // finger lifts (a touch screen can't hover), until the next tap
+    const ch = this.choice;
+    if (ch && (!isAlive(this.sim.d.wyrds[ch.id]) || (!ch.touch && hover !== ch.id))) this.choice = null;
+    if (hover === null && this.choice?.touch) hover = this.choice.id;
+    this.hover = hover;
+    const hw = hover !== null ? this.sim.d.wyrds[hover] : null;
+    const at = this.hoverPt ?? (hw ? { x: hw.x, y: hw.y - 7, touch: true } : null);
+    this.crowd = at && hover !== null ? cycleSet(this.under(at.x, at.y, at.touch)).length : 0;
     const hk = this.armed && this.hover !== null ? `${this.armed}:${this.hover}` : '';
     if (hk && hk !== this.hoverKey && this.log) this.log.hovers++;
     this.hoverKey = hk;
@@ -953,6 +1016,7 @@ export class PlayScene {
       projecting: this.projectKey || this.projectTouch, touch: !!this.hoverPt?.touch,
       // the doom lesson's arrow, until its Wyrdling's new fate is on screen instead
       pointer: this.doomPointer && !(this.branch && this.hover === this.doomPointer.id) ? this.doomPointer : null, marks: this.markViews(),
+      crowd: this.crowd, safe: this.insets ?? undefined,
     });
     // the first sacrifice label ("1 lost · 3 saved later") gets a word on what it means
     if (this.view.sacrifice && this.teach('sacrifice')) {
@@ -976,6 +1040,18 @@ export class PlayScene {
         doomed: this.fate?.dead ?? 0, horizon: this.cfg.horizonSec,
         stalled: this.stalled, verdict: this.verdictView(),
       });
+      this.measureInsets();
+    }
+  }
+
+  /** What the HUD's bars cover, measured after the HUD updates, for the next frame: twice a second (they
+   *  change with the screen, a boss bar, a lesson) and as soon as the armed calling's note comes or goes. */
+  private measureInsets(): void {
+    if (!this.hud) return;
+    if (!this.insets || --this.insetsAge <= 0 || this.armed !== this.insetsArmed) {
+      this.insets = { ...this.hud.insets(), left: 0, right: 0 };
+      this.insetsAge = 30;
+      this.insetsArmed = this.armed;
     }
   }
 
