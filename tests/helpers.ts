@@ -195,8 +195,10 @@ export function slackRows(def: LevelDef, rec: Recording): SlackRow[] {
       }
       return SLACK_TICKS;
     };
+    // edge() counts refused clicks into row, so both sides run before it is copied
     const early = edge(-1);
-    return { ...row, early, late: edge(1) };
+    const late = edge(1);
+    return { ...row, early, late };
   });
 }
 

@@ -427,6 +427,32 @@ export class GameView {
       const on = sim.ventOn(v);
       for (let x = v.x; x < v.x + v.w; x += 16) E.push(this.f('vent', on ? Math.floor(time * 16) : 0), x + 8, v.y);
       if (on && Math.random() < 0.6 * (v.w / 16)) this.sparks.spawn(v.x + Math.random() * v.w, v.y - 4, 0, -1.2 - Math.random() * 0.8, v.h / 1.6, 0.6, 0.8, 1, 0.35, 1, 0, { drag: 1 });
+      if (!on) continue;
+      // the whole column, not only its grate, must read as rising air: a haze over the open air in it,
+      // fading upwards in bands, and streaks rising with their bright heads leading
+      const W = this.atlas.white, dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
+      const top = v.y - v.h, BANDS = 5;
+      const air = (x: number, y: number) => sim.terrain.get(x, y) === 0;
+      // band b's lower edge in column x, ragged rather than ruled
+      const edge = (x: number, b: number) => b === 0 ? v.y : b === BANDS ? top : Math.round(v.y - (v.h * b) / BANDS) + ((x * 7) % 9) - 4;
+      for (let x = v.x; x < v.x + v.w; x += 2) {
+        let lo = v.y;
+        while (lo > top && !air(x, lo)) lo--; // up from the grate, or the slope over it, to the open air
+        let hi = lo;
+        while (hi > top && air(x, hi)) hi--; // and on up to the rock above, or the column's top
+        for (let b = 0; b < BANDS; b++) {
+          const y0 = Math.max(hi, edge(x, b + 1)), y1 = Math.min(lo, edge(x, b));
+          if (y1 > y0) this.glow.push(dot, x, y0, { sx: 2, sy: y1 - y0, r: 0.7, g: 0.8, b: 1, a: 0.1 * (1 - b / BANDS) });
+        }
+      }
+      for (let x = v.x + 5; x < v.x + v.w; x += 11) {
+        const len = 6 + ((x * 37) % 7);
+        const y = v.y - ((time * 40 + x * 23) % v.h);
+        if (!air(x, y) || !air(x, y - len - 2)) continue;
+        const k = Math.max(0, Math.min(1, (v.y - y) / 20, (y - len - top) / 30)); // fade in at the grate, out at the top
+        this.glow.push(dot, x, y - len, { sy: len, r: 0.7, g: 0.85, b: 1, a: 0.15 * k });
+        this.glow.push(dot, x, y - len - 2, { sy: 2, r: 0.85, g: 0.95, b: 1, a: 0.5 * k });
+      }
     }
     // spikes
     for (const s of L.spikes) for (let x = s.x; x < s.x + s.w; x += 8) E.push(this.f('spikes'), x, s.y);

@@ -202,7 +202,7 @@ describe('loop detector', () => {
       report(`${id} null run`, r);
       holds(r.sim, r.det.loop!, 300, `${id} null run`);
     }
-  });
+  }, 30_000); // about 3 s alone, but it has passed 5 s in a loaded full run
 
   describe('proves cycles apart', () => {
     // n3 as it shipped in wave 1, a Warden granted to the first Wyrdling at tick 405, short of the plate: five

@@ -191,8 +191,9 @@ export const M3C: LevelDef = {
     // the root-pillar: 54 px, a climb, and a safe drop back down
     { op: 'rect', mat: 'Rock', x: 0, y: 198, w: 120, h: 54, rough: 1.5, grain: 9 },
     { op: 'rect', mat: 'Root', x: 70, y: 206, w: 50, h: 40, rough: 5, grain: 10, only: ['Rock'] },
-    // a mound on its top, its east side a long gentle slope (a Basher bites anywhere on it)
-    { op: 'ground', mat: 'Earth', pts: [[24, 198], [44, 182], [62, 176], [118, 196]], rough: 1, bottom: 200 },
+    // a mound on its top, its east side a long gentle slope (a Basher bites anywhere on it), rising to a
+    // knoll thick enough that the spindle inside it reads as buried, not lying on the grass
+    { op: 'ground', mat: 'Earth', pts: [[24, 198], [40, 182], [54, 168], [66, 166], [76, 174], [84, 184], [118, 196]], rough: 1, bottom: 200 },
     { op: 'rect', mat: 'Earth', x: 0, y: 194, w: 118, h: 6, rough: 1 },
     { op: 'rect', mat: 'Rock', x: 340, y: 120, w: 180, h: 70, rough: 4, grain: 14 },
     { op: 'rect', mat: 'Iron', x: 324, y: 186, w: 20, h: 8 },

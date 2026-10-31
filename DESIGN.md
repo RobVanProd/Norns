@@ -68,7 +68,9 @@ optional **Golden Spindle** collectible (third star).
 - **Unlocks** never wait on a single level or on extra stars: clearing a level at quota opens the
   next two in its realm; a boss needs three of its realm's puzzles cleared; the next realm opens
   when the boss falls *or* every puzzle in the realm is cleared. Unlocks are keyed by level id and
-  stick once earned (`src/game/save.ts`), so adding a level to a realm never relocks a save.
+  stick once earned (`src/game/save.ts`), so adding a level to a realm never relocks a save; a
+  level added before one already cleared opens too. Saves from the first release, which opened
+  levels in one global order and kept no list, load with everything that order had open.
 - **Threads** (currency) = saved Wyrdlings + star bonuses → spent at **the Loom** on upgrades
   (longer foresight horizon, cosmetic hoods). Every level is solvable with no upgrades — the
   solution tests run on base stats. Rewind already reaches the first tick, so the old longer-rewind
