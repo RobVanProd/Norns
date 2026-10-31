@@ -22,7 +22,6 @@ export interface PlayConfig {
   level: LevelDef;
   mode: PlayMode;
   horizonSec: number;
-  rewindSec: number;
   foresight: boolean;
   hints: boolean;
 }
@@ -74,6 +73,7 @@ export class PlayScene {
   private acc = 0;
   private rewinding = false;
   private rewindAcc = 0;
+  private rewindHeld = 0;
   private rewindFx = 0;
   private rewinds = 0;
   private camX = 0;
@@ -98,7 +98,7 @@ export class PlayScene {
     p.levelW = cfg.level.width;
     p.levelH = cfg.level.height;
     this.view = new GameView(p, art, this.sim);
-    this.timeline = new Timeline(cfg.rewindSec);
+    this.timeline = new Timeline();
     this.timeline.record(this.sim);
     if (cfg.mode !== 'play') {
       this.solution = new SolutionPlayer(cfg.level.solution);
@@ -114,6 +114,7 @@ export class PlayScene {
       this.hud = new Hud(uiRoot, art.icons, cfg.level.skills, {
         skill: (s) => this.selectSkill(s),
         pause: () => this.togglePause(),
+        step: (n) => this.stepTicks(n),
         speed: () => this.cycleSpeed(),
         rewind: (on) => this.setRewind(on),
         foresight: () => this.toggleForesight(),
@@ -189,6 +190,8 @@ export class PlayScene {
       return;
     }
     switch (code) {
+      case 'Period': this.stepTicks(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? TICK_RATE : 1); break;
+      case 'Comma': this.stepTicks(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? -TICK_RATE : -1); break;
       case 'Space': case 'KeyP': this.togglePause(); break;
       case 'KeyF': this.cycleSpeed(); break;
       case 'KeyV': this.toggleForesight(); break;
@@ -229,8 +232,46 @@ export class PlayScene {
     this.rewinding = on;
     audio.setRewinding(on);
     audio.sfx(on ? 'rewind_start' : 'rewind_end');
-    if (on) this.rewinds++;
-    else { this.fate = null; this.fateJob = null; this.branchJob = null; this.branchKey = ''; }
+    if (on) { this.rewinds++; this.rewindAcc = 0; this.rewindHeld = 0; }
+    else this.forgetFate();
+  }
+
+  private forgetFate(): void {
+    this.fate = null; this.fateJob = null; this.branchJob = null; this.branchKey = '';
+  }
+
+  /** Paused tick-stepping (`,` `.`; Shift for a second): forward does exactly a game-loop tick, back
+   *  restores the previous snapshot (the last 5 s are kept per tick), undoing any calling made on it. */
+  stepTicks(n: number): void {
+    if (this.cfg.mode !== 'play' || this.state !== 'play' || this.rewinding) return;
+    if (!this.paused) this.togglePause();
+    if (n > 0) {
+      for (let i = 0; i < n && !this.sim.d.finished; i++) this.tick(true);
+    } else {
+      const prev = this.timeline.back(Math.max(0, this.sim.d.tick + n) + 1);
+      if (!prev || prev.d.tick >= this.sim.d.tick) { audio.sfx('ui_deny'); return; }
+      this.sim = prev;
+    }
+    this.forgetFate();
+  }
+
+  /** One simulation tick with all its side effects: scripted solution, step, timeline, effects, sound. */
+  private tick(sound: boolean): void {
+    if (this.solution) {
+      const before = this.sim.events.length;
+      const applied = this.solution.apply(this.sim);
+      if (applied.length) {
+        const s = applied[applied.length - 1];
+        if (this.cfg.mode === 'vision') this.visionCaption = { text: `Skuld grants ${SKILL_INFO[s.skill].name.toUpperCase()}`, t: 2.2 };
+        const fresh = this.sim.events.slice(before);
+        this.view.handleEvents(fresh, this.sim);
+        if (sound && this.cfg.mode === 'vision') this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
+      }
+    }
+    this.sim.step();
+    this.timeline.record(this.sim);
+    this.view.handleEvents(this.sim.events, this.sim);
+    if (sound && this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim.d.tick, this.camX, this.p.viewW);
   }
 
   private pick(wx: number, wy: number, touch: boolean): number | null {
@@ -353,12 +394,14 @@ export class PlayScene {
     this.camX += this.camVX * dt; this.camY += this.camVY * dt;
 
     if (this.rewinding) {
-      this.rewindAcc += dt * 12;
-      while (this.rewindAcc >= 1) {
-        this.rewindAcc -= 1;
-        const prev = this.timeline.back(this.sim.d.tick);
-        if (!prev) { this.setRewind(false); break; }
-        this.sim = prev;
+      // 4× to start, speeding up to 16× over a few seconds of holding, so the start of a long level is in reach
+      this.rewindHeld += dt;
+      this.rewindAcc += dt * TICK_RATE * (4 + 4 * Math.min(3, this.rewindHeld));
+      const target = this.sim.d.tick - Math.floor(this.rewindAcc);
+      if (target < this.sim.d.tick) {
+        const prev = this.timeline.back(Math.max(0, target) + 1);
+        if (!prev || prev.d.tick >= this.sim.d.tick) this.setRewind(false); // back at the start
+        else { this.rewindAcc -= this.sim.d.tick - prev.d.tick; this.sim = prev; }
       }
     } else if (this.state === 'play' && !this.paused && !this.debugHold && !this.sim.d.finished) {
       this.acc += dt * TICK_RATE * (this.cfg.mode === 'attract' ? 1 : this.speed);
@@ -366,21 +409,7 @@ export class PlayScene {
       while (this.acc >= 1 && steps < 12) {
         this.acc -= 1;
         steps++;
-        if (this.solution) {
-          const before = this.sim.events.length;
-          const applied = this.solution.apply(this.sim);
-          if (applied.length) {
-            const s = applied[applied.length - 1];
-            if (this.cfg.mode === 'vision') this.visionCaption = { text: `Skuld grants ${SKILL_INFO[s.skill].name.toUpperCase()}`, t: 2.2 };
-            const fresh = this.sim.events.slice(before);
-            this.view.handleEvents(fresh, this.sim);
-            if (this.cfg.mode === 'vision') this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
-          }
-        }
-        this.sim.step();
-        this.timeline.record(this.sim);
-        this.view.handleEvents(this.sim.events, this.sim);
-        if (this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim.d.tick, this.camX, this.p.viewW);
+        this.tick(true);
         if (this.sim.d.finished) break;
       }
       if (this.acc > 4) this.acc = 0;
@@ -481,18 +510,13 @@ export class PlayScene {
     this.state = 'play';
     this.rewinds++;
     if (!this.paused) this.togglePause();
-    this.fate = null; this.fateJob = null; this.branchJob = null; this.branchKey = '';
+    this.forgetFate();
     return true;
   }
 
   /** Dev tooling (scripts/frames.mjs): advance exactly n ticks with the same per-tick work as update(). */
   debugAdvance(n: number): void {
-    for (let i = 0; i < n && !this.sim.d.finished; i++) {
-      if (this.solution) this.solution.apply(this.sim);
-      this.sim.step();
-      this.timeline.record(this.sim);
-      this.view.handleEvents(this.sim.events, this.sim);
-    }
+    for (let i = 0; i < n && !this.sim.d.finished; i++) this.tick(false);
   }
 
   /** Dev tooling: pin the camera (world px, top-left) or release it with null. */

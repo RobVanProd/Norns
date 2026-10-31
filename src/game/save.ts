@@ -13,15 +13,18 @@ export const HOODS: { id: string; name: string; hue: number | null; cost: number
 
 export const UPGRADES = {
   foresight: { name: "Skuld's Sight", desc: 'Foresight sees further ahead.', levels: [4, 6, 8, 10], costs: [12, 28, 50] },
-  rewind: { name: "Urðr's Memory", desc: 'Rewind reaches further back.', levels: [20, 40, 60], costs: [15, 35] },
 } as const;
+
+/** Urðr's Memory (longer rewind) was retired when rewind reached back to the first tick; its costs are
+ *  refunded to old saves. */
+const RETIRED_REWIND_COSTS = [15, 35];
 
 export interface SaveData {
   v: 1;
   stars: Record<string, number>;
   best: Record<string, number>;
   threads: number;
-  upgrades: { foresight: number; rewind: number };
+  upgrades: { foresight: number };
   hood: string;
   hoods: string[];
   settings: { music: number; sfx: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean };
@@ -32,7 +35,7 @@ const KEY = 'norns.save.v1';
 
 function fresh(): SaveData {
   return {
-    v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0, rewind: 0 }, hood: 'teal', hoods: ['teal'],
+    v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'],
     settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false }, seenIntro: false,
   };
 }
@@ -41,9 +44,13 @@ export function loadSave(): SaveData {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return fresh();
-    const d = JSON.parse(raw) as Partial<SaveData>;
+    const d = JSON.parse(raw) as Partial<SaveData> & { upgrades?: { rewind?: number } };
     const f = fresh();
-    return { ...f, ...d, upgrades: { ...f.upgrades, ...d.upgrades }, settings: { ...f.settings, ...d.settings } } as SaveData;
+    const refund = RETIRED_REWIND_COSTS.slice(0, d.upgrades?.rewind ?? 0).reduce((a, b) => a + b, 0);
+    return {
+      ...f, ...d, threads: (d.threads ?? 0) + refund,
+      upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...d.settings },
+    } as SaveData;
   } catch {
     return fresh();
   }

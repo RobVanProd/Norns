@@ -5,6 +5,8 @@ import { el, pixelCanvas } from './dom';
 export interface HudCallbacks {
   skill(s: SkillId): void;
   pause(): void;
+  /** paused tick-stepping: +1 / -1 */
+  step(n: number): void;
   speed(): void;
   rewind(on: boolean): void;
   foresight(): void;
@@ -75,11 +77,15 @@ export class Hud {
       return b;
     };
     this.pauseBtn = btn('pause', 'Pause (Space)', () => cb.pause());
+    // shown only while paused (see .hud.paused in style.css)
+    const stepBack = btn('arrow_left', 'Step back one tick (,)', () => cb.step(-1));
+    const stepFwd = btn('arrow_right', 'Step forward one tick (.)', () => cb.step(1));
+    stepBack.classList.add('step'); stepFwd.classList.add('step');
     this.speedBtn = btn('fast', 'Speed (F)', () => cb.speed());
     this.eyeBtn = btn('eye', "Skuld's Foresight (V)", () => cb.foresight());
     const restartBtn = btn('restart', 'Restart', () => cb.restart());
     const menuBtn = btn('home', 'Menu (Esc)', () => cb.menu());
-    const controls = el('div', { class: 'controls panel' }, this.eyeBtn, this.pauseBtn, this.speedBtn, restartBtn, menuBtn);
+    const controls = el('div', { class: 'controls panel' }, this.eyeBtn, stepBack, this.pauseBtn, stepFwd, this.speedBtn, restartBtn, menuBtn);
     this.bossFill = el('div', { class: 'bfill' });
     this.bossName = el('div', { class: 'bname' });
     this.bossWrap = el('div', { class: 'bossbar' }, this.bossName, el('div', { class: 'btrack' }, this.bossFill));

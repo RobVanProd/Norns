@@ -138,7 +138,6 @@ export class Game {
     const scene = new PlayScene(this.p, this.art, {
       level, mode,
       horizonSec: UPGRADES.foresight.levels[this.save.upgrades.foresight],
-      rewindSec: UPGRADES.rewind.levels[this.save.upgrades.rewind],
       foresight: s.foresight, hints: s.hints,
     }, {
       finished: (r) => this.results(r),
@@ -399,7 +398,7 @@ export class Game {
     const s = this.save;
     const wallet = el('div', { class: 'wallet' }, pixelCanvas(this.art.icons.thread, 2, 'px icon'), el('span', { text: `${s.threads} threads` }));
     const ups = el('div', { class: 'ups' });
-    for (const key of ['foresight', 'rewind'] as const) {
+    for (const key of ['foresight'] as const) {
       const u = UPGRADES[key];
       const lvl = s.upgrades[key];
       const max = lvl >= u.costs.length;
@@ -416,7 +415,7 @@ export class Game {
       });
       const unit = 's';
       ups.append(el('div', { class: 'up panel' },
-        pixelCanvas(this.art.icons[key === 'foresight' ? 'eye' : 'rewind'], 3, 'px icon'),
+        pixelCanvas(this.art.icons.eye, 3, 'px icon'),
         el('div', { class: 'up-text' }, el('h3', { text: u.name }), el('p', { text: `${u.desc} Now ${u.levels[lvl]}${unit}${max ? '' : ` → ${u.levels[lvl + 1]}${unit}`}.` })),
         b));
     }

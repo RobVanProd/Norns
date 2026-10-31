@@ -206,6 +206,7 @@ body.portrait:not(.rotate-ok) #rotate {
 .spindle-ind { opacity: 0.25; filter: grayscale(1); transition: all 0.3s; }
 .spindle-ind.got { opacity: 1; filter: none; animation: starpop 0.5s; }
 .controls { display: flex; gap: 4px; padding: 4px; }
+.hud:not(.paused) .controls .step { display: none; }
 .bossbar { position: absolute; top: calc(66px + var(--safe-t)); left: 50%; transform: translateX(-50%); width: min(420px, calc(70 * var(--uvw))); text-align: center; display: none; pointer-events: none; }
 .bossbar.show { display: block; }
 .bname { font-size: 15px; color: #ffb3a8; text-shadow: 2px 2px 0 #000; margin-bottom: 3px; letter-spacing: 1px; }
