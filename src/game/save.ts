@@ -44,6 +44,10 @@ export interface SaveData {
   seenIntro: boolean;
   /** best run per level id ("Watch your best") */
   weaves: Record<string, BestWeave>;
+  /** onboarding moments already shown, each once per save: the event hints (see Lesson in play.ts) and 'map' */
+  seen: string[];
+  /** per level id, the furthest tier of Skuld's Vision watched (1-4); the Vision reopens there */
+  visionTier: Record<string, number>;
 }
 
 const KEY = 'norns.save.v1';
@@ -63,7 +67,7 @@ function fresh(): SaveData {
   const s: SaveData = {
     v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
     settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false, verdict: true }, seenIntro: false,
-    weaves: {},
+    weaves: {}, seen: [], visionTier: {},
   };
   refreshOpened(s);
   return s;
@@ -82,6 +86,7 @@ export function loadSave(): SaveData {
       // a save with no opened list keeps what the old linear order opened; today's rules add to it below
       opened: Array.isArray(d.opened) ? d.opened : legacyOpened(stars),
       weaves: d.weaves && typeof d.weaves === 'object' ? d.weaves : {},
+      seen: Array.isArray(d.seen) ? d.seen : [], visionTier: d.visionTier && typeof d.visionTier === 'object' ? d.visionTier : {},
       upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...d.settings },
     } as SaveData;
     refreshOpened(s);
@@ -97,6 +102,13 @@ export function writeSave(s: SaveData): void {
   } catch {
     /* storage unavailable: progress lasts for this session only */
   }
+}
+
+/** Mark an onboarding moment shown; false if it was already (the caller writes the save). */
+export function markSeen(s: SaveData, key: string): boolean {
+  if (s.seen.includes(key)) return false;
+  s.seen.push(key);
+  return true;
 }
 
 export function starCount(mask: number | undefined): number {

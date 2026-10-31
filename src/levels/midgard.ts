@@ -9,9 +9,8 @@ export const M1: LevelDef = {
   intro: 'The Wyrdlings wander blind. Grant one the calling of the Digger and open a way below.',
   idea: 'Dig down through soft earth',
   hints: [
+    // Foresight's skulls and Rewind are taught when they first matter (see Lesson in play.ts)
     'Pick DIGGER from the bar, then tap a Wyrdling on the grassy ledge. Anywhere above the cave will do.',
-    'Dotted threads show each fate. A red skull means doom — change it.',
-    'Hold REWIND (or R) to unspool time. Mistakes cost seconds, not restarts.',
     'Something glitters beneath the cave floor…',
   ],
   width: 480, height: 270, seed: 11,
@@ -59,7 +58,6 @@ export const M2: LevelDef = {
   idea: 'Weave a bridge across a gap',
   hints: [
     'WEAVERS lay 12 rising planks. Begin the bridge anywhere in the last few strides before the gorge.',
-    'Watch the gold branch thread before you commit: it shows the new fate.',
     'A bridge can climb as well as cross. Something glitters on the floating stone…',
   ],
   width: 480, height: 270, seed: 22,

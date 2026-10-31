@@ -1,7 +1,8 @@
 // Deterministic frame capture (dev server only, uses window.__norns):
 //   node scripts/frames.mjs <url> <outDir> <w> <h> <tick,tick,...> [options]
-// Loads the url (add &go, and &vision to replay the scripted solution) and drives the game on its
-// manual clock. For each listed tick it fast-forwards the simulation to `settle` ticks before it, then
+// Loads the url (add &go; &solution plays the whole scripted solution, &vision Skuld's Vision of the
+// quota route and &tier=1-4 one stage of it) and drives the game on its manual clock. For each listed
+// tick it fast-forwards the simulation to `settle` ticks before it, then
 // plays the rest one rendered frame per tick (1/30 s), so popups, particles, flashes and shake look
 // exactly as a player would see them. Foresight jobs run to completion every frame, so its threads
 // don't depend on how fast this machine is.

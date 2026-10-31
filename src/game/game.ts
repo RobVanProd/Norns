@@ -11,11 +11,19 @@ import type { Weave } from '../sim/weave';
 import { clear, el, pixelCanvas } from '../ui/dom';
 import { PlayScene, type PlayMode, type PlayResult } from './play';
 import {
-  BOSS_NEEDS, HOODS, UPGRADES, bestWeave, isUnlocked, loadSave, offerWeave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave,
+  BOSS_NEEDS, HOODS, UPGRADES, bestWeave, isUnlocked, loadSave, markSeen, offerWeave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave,
   type SaveData,
 } from './save';
 import { eraseStats, levelStats, loadStats, logFinish, logQuit, playtestReport, writeStats, type QuitPoint, type Stats } from './stats';
 import { setHood } from './view';
+import { VISION_TIERS, type VisionTier } from './vision';
+
+/** What a partial Vision leaves the player with (tier 4 says what the whole path saved). */
+const VISION_FADES: Record<1 | 2 | 3, string> = {
+  1: 'That is where and when it begins. Which calling? That is yours to find.',
+  2: 'Now you know the first calling: where, when and which.',
+  3: 'Those are the first steps. The rest is yours to weave.',
+};
 
 type Screen = 'title' | 'map' | 'play' | 'loom';
 
@@ -62,8 +70,14 @@ export class Game {
     const q = new URLSearchParams(location.search);
     const direct = ALL_LEVELS.find((l) => l.id === (q.get('level') ?? q.get('vision')));
     if (direct) {
-      this.playLevel(direct, q.has('vision') ? 'vision' : 'play');
+      // dev tooling (see AGENTS.md): &vision watches Skuld's Vision of the whole quota route, &tier=1-4 one
+      // stage of it, &solution plays the whole scripted solution (spindle steps too) as an attempt
+      const dev = import.meta.env.DEV;
+      const tier = Number(q.get('tier') ?? 4);
+      if (dev && q.has('vision')) this.playLevel(direct, 'vision', undefined, tier >= 1 && tier <= 4 ? tier as VisionTier : 4);
+      else this.playLevel(direct);
       if (q.has('go')) { this.closeModal(); this.scene?.begin(); }
+      if (dev && q.has('solution') && this.scene?.cfg.mode === 'play') this.scene.debugSolution();
     } else this.showTitle();
     requestAnimationFrame((t) => this.frame(t));
     // dev-only hook for scripts/frames.mjs, scripts/clicktest.mjs and agents (see AGENTS.md)
@@ -159,7 +173,7 @@ export class Game {
     logQuit(this.stats, scene.cfg.level.id, scene.log, { tick: d.tick, saved: d.saved, used: d.used, via }, scene.weave);
   }
 
-  private startScene(level: LevelDef, mode: PlayMode, replay?: Weave): PlayScene {
+  private startScene(level: LevelDef, mode: PlayMode, replay?: Weave, visionTier?: VisionTier): PlayScene {
     // what the player does instead says how the attempt on screen ended
     const old = this.scene;
     if (old?.log) this.endAttempt(mode === 'vision' ? 'vision' : mode === 'play' && old.cfg.level === level ? 'restart' : 'left');
@@ -172,7 +186,7 @@ export class Game {
     }
     const s = this.save.settings;
     const scene = new PlayScene(this.p, this.art, {
-      level, mode, replay,
+      level, mode, replay, visionTier,
       horizonSec: UPGRADES.foresight.levels[this.save.upgrades.foresight],
       foresight: s.foresight, hints: s.hints, rewindToggle: s.rewindToggle, verdict: s.verdict,
     }, {
@@ -181,7 +195,9 @@ export class Game {
       dialogOpen: () => this.modal !== null,
       restart: () => this.playLevel(level),
       foresightChanged: (on) => { this.save.settings.foresight = on; writeSave(this.save); },
-    }, mode === 'play' ? this.screenEl : null);
+      fresh: (key) => !this.save.seen.includes(key),
+      learn: (key) => { if (markSeen(this.save, key)) writeSave(this.save); },
+    }, mode === 'attract' ? null : this.screenEl);
     this.scene = scene;
     scene.resize(window.innerWidth, window.innerHeight, this.dpr);
     return scene;
@@ -215,33 +231,18 @@ export class Game {
     this.fitTitleLogo();
   }
 
+  /** The story, on one card. The very first launch goes from it straight into the first level; the map
+   *  comes after that level. */
   private story(): void {
-    const pages = [
-      'At the roots of Yggdrasil, three Norns weave the fate of all things.',
-      'From their Loom tumble the WYRDLINGS — small hooded spirits, each trailing a golden thread. They wander blind.',
-      'You cannot carry them. You can only nudge fate: grant callings, peer ahead along the threads, and unspool time when fate goes wrong.',
-      'Lead them home through the Root Gates.',
-    ];
-    let i = 0;
-    const text = el('p', { class: 'story-text' });
-    const next = el('button', { class: 'btn gold', text: 'Next' });
+    const go = el('button', { class: 'btn gold', text: 'To Midgard' });
     const skip = el('button', { class: 'btn', text: 'Skip' });
-    const done = () => { this.save.seenIntro = true; writeSave(this.save); this.showMap(); };
-    const show = () => {
-      text.textContent = pages[i];
-      const last = i === pages.length - 1;
-      next.textContent = last ? 'To Midgard' : 'Next';
-      skip.style.display = last ? 'none' : '';
-    };
-    next.addEventListener('click', () => {
-      audio.sfx('ui_click');
-      i++;
-      if (i >= pages.length) { done(); return; }
-      show();
-    });
+    const done = () => { this.save.seenIntro = true; writeSave(this.save); this.playLevel(ALL_LEVELS[0]); };
+    go.addEventListener('click', () => { audio.sfx('ui_click'); done(); });
     skip.addEventListener('click', () => { audio.sfx('ui_back'); done(); });
-    show();
-    this.openModal(el('div', { class: 'panel modal story' }, el('h2', { text: 'The Norns' }), text, el('div', { class: 'row' }, next, skip)));
+    this.openModal(el('div', { class: 'panel modal story' }, el('h2', { text: 'The Norns' }),
+      el('p', { class: 'story-text', text: 'At the roots of Yggdrasil, three Norns weave all fate. From their Loom tumble the Wyrdlings: '
+        + 'small hooded spirits who wander blind. Grant them callings, peer ahead along their threads, and unspool time when fate goes wrong.' }),
+      el('div', { class: 'row' }, go, skip)));
   }
 
   // ------------------------------------------------------------------ map
@@ -249,6 +250,7 @@ export class Game {
   showMap(): void {
     this.screen = 'map';
     this.closeModal();
+    if (markSeen(this.save, 'map')) writeSave(this.save);
     if (!this.scene || this.scene.cfg.mode !== 'attract') this.startScene(ALL_LEVELS[0], 'attract');
     this.music('map');
     clear(this.screenEl);
@@ -292,31 +294,66 @@ export class Game {
 
   // ------------------------------------------------------------------ play
 
-  /** Open a level: to play, or to watch Skuld's Vision (or, with `replay`, the player's own best Weave). */
-  playLevel(level: LevelDef, mode: PlayMode = 'play', replay?: Weave): void {
+  /** Open a level: to play, or to watch Skuld's Vision at a tier (or, with `replay`, the player's own best Weave). */
+  playLevel(level: LevelDef, mode: PlayMode = 'play', replay?: Weave, tier?: VisionTier): void {
     this.screen = 'play';
     this.current = level;
     clear(this.screenEl);
-    const scene = this.startScene(level, mode, replay);
+    if (mode === 'vision' && !replay) {
+      // the Vision opens where this level's last one left off, and remembers how far it went
+      tier ??= this.visionTier(level);
+      if (tier > (this.save.visionTier[level.id] ?? 0)) { this.save.visionTier[level.id] = tier; writeSave(this.save); }
+    }
+    const scene = this.startScene(level, mode, replay, tier);
     this.music((level.boss ? 'boss' : level.music ?? level.realm) as SongId);
     audio.setIntensity(0);
     if (mode === 'vision') {
       const stop = el('button', { class: 'btn small vision-stop', text: replay ? 'Stop' : 'End Vision' });
-      stop.addEventListener('click', () => this.playLevel(level));
-      this.screenEl.append(el('div', { class: 'vision-banner' }, el('span', { text: replay ? 'Your best weave, woven again' : "Skuld's Vision — a path that works" }), stop));
+      stop.addEventListener('click', () => { audio.sfx('ui_back'); this.playLevel(level); });
+      const banner = el('div', { class: 'vision-banner' });
+      if (replay || !tier) banner.append(el('span', { text: 'Your best weave, woven again' }));
+      else {
+        banner.append(el('span', { text: "Skuld's Vision" }), el('span', { class: 'vtier', text: `${tier}/4 ${VISION_TIERS[tier]}` }));
+        if (tier < 4) {
+          const more = el('button', { class: 'btn small gold', text: 'Show more' });
+          more.addEventListener('click', () => { audio.sfx('ui_click'); this.playLevel(level, 'vision', undefined, (tier! + 1) as VisionTier); });
+          banner.append(more);
+        }
+      }
+      banner.append(stop);
+      this.screenEl.append(banner);
       return;
     }
     if (level.boss) audio.stinger('boss_intro');
     this.introCard(level, scene);
   }
 
+  /** The tier a level's Vision opens at: the furthest one already watched. */
+  private visionTier(level: LevelDef): VisionTier {
+    return Math.max(1, Math.min(4, this.save.visionTier[level.id] ?? 1)) as VisionTier;
+  }
+
   private introCard(level: LevelDef, scene: PlayScene): void {
+    // named calling chips; pointing at one (or tapping it, on touch) says what it does underneath
     const skills = el('div', { class: 'skill-list' });
+    const desc = el('p', { class: 'sk-desc' });
+    const read = (chip: HTMLElement, s: (typeof SKILLS)[number]) => {
+      for (const c of skills.children) c.classList.toggle('on', c === chip);
+      desc.replaceChildren(el('b', { text: SKILL_INFO[s].name }), ` ${SKILL_INFO[s].desc}`);
+    };
     for (const s of SKILLS) {
       const n = level.skills[s];
       if (n === undefined) continue;
-      skills.append(el('div', { class: 'sk', title: SKILL_INFO[s].desc }, pixelCanvas(this.art.icons[s], 2, 'px icon'), el('span', { text: `${n}` })));
+      const chip = el('button', { class: 'sk', 'aria-label': `${SKILL_INFO[s].name} ×${n}` },
+        pixelCanvas(this.art.icons[s], 2, 'px icon'), el('span', { text: SKILL_INFO[s].name }), el('span', { class: 'n', text: `×${n}` }));
+      chip.addEventListener('click', () => { audio.sfx('ui_click'); read(chip, s); });
+      chip.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') read(chip, s); });
+      skills.append(chip);
     }
+    // one calling: say what it does straight away; several: say how to read them
+    const only = SKILLS.filter((s) => level.skills[s] !== undefined);
+    if (only.length === 1) read(skills.firstElementChild as HTMLElement, only[0]);
+    else desc.textContent = matchMedia('(hover: none)').matches ? 'Tap a calling to read what it does.' : 'Point at a calling to read what it does.';
     const realm = REALM_LIST.find((r) => r.id === level.realm);
     const idx = realm ? realm.levels.indexOf(level) : 0;
     const begin = el('button', { class: 'btn big gold', text: 'Begin' });
@@ -349,7 +386,7 @@ export class Game {
           ? el('div', { class: `goal${mask & 4 ? ' got' : ''}` }, pixelCanvas(this.art.icons[mask & 4 ? 'star' : 'star_empty'], 2, 'px icon'), el('span', { text: 'Find the Golden Spindle' }))
           : null,
       ),
-      skills,
+      skills, desc,
       el('div', { class: 'row' }, look, watch, begin),
     ));
   }
@@ -359,12 +396,15 @@ export class Game {
     if (!level || !this.scene) return;
     if (this.scene.cfg.mode === 'vision') {
       const own = this.scene.cfg.replay;
+      const tier = this.scene.cfg.visionTier ?? 4;
       const text = own
         ? `Your weave saved ${r.saved} of ${level.wyrdlings} with ${r.skillsUsed} calling${r.skillsUsed === 1 ? '' : 's'}${this.scene.replayDesync ? ', but it went out of step with the recording' : ''}.`
-        : `Skuld's path saved ${r.saved} of ${level.wyrdlings}. Now weave it yourself.`;
+        : tier < 4 ? VISION_FADES[tier as 1 | 2 | 3] : `Skuld's path saved ${r.saved} of ${level.wyrdlings}. Now weave it yourself.`;
+      const buttons: [string, () => void, boolean?][] = [[own ? 'Play' : 'Try it', () => this.playLevel(level), true]];
+      if (!own && tier < 4) buttons.push(['Show more', () => this.playLevel(level, 'vision', undefined, (tier + 1) as VisionTier)]);
+      buttons.push(['Watch again', () => this.playLevel(level, 'vision', own, own ? undefined : tier)], ['Map', () => this.showMap()]);
       this.openModal(el('div', { class: 'panel modal results' }, el('h2', { text: own ? 'Woven again' : 'The Vision fades' }),
-        el('p', { text }),
-        this.row([[own ? 'Play' : 'Try it', () => this.playLevel(level), true], ['Map', () => this.showMap()]])));
+        el('p', { text }), this.row(buttons)));
       return;
     }
     const out = recordOutcome(this.save, {
@@ -395,12 +435,15 @@ export class Game {
     const next = following && isUnlocked(this.save, following.id) ? following
       : [...ALL_LEVELS.slice(at + 1), ...ALL_LEVELS.slice(0, at)].find((l) => isUnlocked(this.save, l.id) && !((this.save.stars[l.id] ?? 0) & 1));
     const buttons: [string, () => void, boolean?][] = [];
-    if (won && next) buttons.push(['Next', () => this.playLevel(next), true]);
+    // the very first clear, before the map was ever seen: the map comes next, to show what it opened
+    const mapFirst = won && (out.newMask & 1) === 1 && !this.save.seen.includes('map');
+    if (mapFirst) buttons.push(['To the map', () => this.showMap(), true]);
+    else if (won && next) buttons.push(['Next', () => this.playLevel(next), true]);
     const scene = this.scene;
     buttons.push(['Rewind', () => { if (scene.reopen()) this.closeModal(); }, !won]);
     buttons.push(['Retry', () => this.playLevel(level)]);
     if (!won) buttons.push(["Skuld's Vision", () => this.playLevel(level, 'vision')]);
-    buttons.push(['Map', () => this.showMap()]);
+    if (!mapFirst) buttons.push(['Map', () => this.showMap()]);
     const lines = [
       el('div', { class: 'stat' }, el('span', { text: 'Saved' }), el('b', { text: `${r.saved} / ${level.wyrdlings}` })),
       el('div', { class: 'stat' }, el('span', { text: 'Needed' }), el('b', { text: `${level.quota}` })),
@@ -458,7 +501,7 @@ export class Game {
     ];
     const finish = () => { this.closeModal(); scene.cutThreads(); };
     // ending is always possible: a stalled or doomed run should never need a restart from the menu
-    if (scene.state === 'play') buttons.push(scene.sim.d.saved >= level.quota ? ['End level now', finish] : ['Cut the Threads (give up)', finish]);
+    if (scene.state === 'play' && scene.cfg.mode === 'play') buttons.push(scene.sim.d.saved >= level.quota ? ['End level now', finish] : ['Cut the Threads (give up)', finish]);
     buttons.push(['Settings', () => this.settings(() => this.pauseMenu(true))], ['World map', () => this.showMap()]);
     const col = el('div', { class: 'col' });
     for (const [t, f, gold] of buttons) {
@@ -606,7 +649,8 @@ export class Game {
         el('div', {},
           slider('Music', s.music, (v) => { s.music = v; audio.setVolumes({ music: v }); }),
           slider('Sound', s.sfx, (v) => { s.sfx = v; audio.setVolumes({ sfx: v }); audio.sfx('ui_click'); }),
-          toggle('Tutorial hints', s.hints, (v) => { s.hints = v; }),
+          toggle('Tutorial hints', s.hints, (v) => { s.hints = v; if (this.scene) this.scene.cfg.hints = v; },
+            'Level tips, and a word the first time something new happens'),
           el('label', { class: 'set' }, el('span', { text: 'Pixel zoom' }), zoom),
           el('label', { class: 'set', title: 'Hold: rewind while R or the rewind button is held. Toggle: press once to start, again to stop.' },
             el('span', { text: 'Rewind' }), rewind)),

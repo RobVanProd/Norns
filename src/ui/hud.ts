@@ -1,5 +1,7 @@
 // In-level HUD: counters, quota bar, boss health, skill bar, time controls, hints, fate summary, the
-// stalemate notice and the paused verdict.
+// stalemate notice and the paused verdict. Above the skill bar: the armed calling's name and what it
+// does, and the onboarding notes that belong down there (Rewind, hover to preview). Skuld's Vision
+// gets a read-only HUD: counters, quota bar, boss bar, pause and speed.
 import { SKILLS, SKILL_INFO, type SkillId } from '../sim/constants';
 import { el, pixelCanvas } from './dom';
 
@@ -78,10 +80,17 @@ export class Hud {
   private verdictEl: HTMLDivElement;
   private hintEl: HTMLDivElement;
   private hintTimer = 0;
+  private armedEl: HTMLDivElement;
+  private armedName: HTMLSpanElement;
+  private armedDesc: HTMLSpanElement;
+  private armedLessonEl: HTMLDivElement;
+  private rewindTip: HTMLDivElement;
+  private rewindTipTimer = 0;
   private icons: Record<string, HTMLCanvasElement>;
   private last = '';
 
-  constructor(parent: HTMLElement, icons: Record<string, HTMLCanvasElement>, available: Partial<Record<SkillId, number>>, cb: HudCallbacks) {
+  /** `readOnly` (Skuld's Vision): counters, quota bar, boss bar, pause and speed, and nothing to grant with. */
+  constructor(parent: HTMLElement, icons: Record<string, HTMLCanvasElement>, available: Partial<Record<SkillId, number>>, cb: HudCallbacks, readOnly = false) {
     this.icons = icons;
     const icon = (k: string, s = 2) => pixelCanvas(icons[k], s, 'px icon');
     this.name = el('div', { class: 'hud-name' });
@@ -109,7 +118,8 @@ export class Hud {
     this.eyeBtn = btn('eye', "Skuld's Foresight (V)", () => cb.foresight());
     const restartBtn = btn('restart', 'Restart', () => cb.restart());
     const menuBtn = btn('home', 'Menu (Esc)', () => cb.menu());
-    const controls = el('div', { class: 'controls panel' }, this.eyeBtn, stepBack, this.pauseBtn, stepFwd, this.speedBtn, restartBtn, menuBtn);
+    const controls = readOnly ? el('div', { class: 'controls panel' }, this.pauseBtn, this.speedBtn)
+      : el('div', { class: 'controls panel' }, this.eyeBtn, stepBack, this.pauseBtn, stepFwd, this.speedBtn, restartBtn, menuBtn);
     this.bossFill = el('div', { class: 'bfill' });
     this.bossName = el('div', { class: 'bname' });
     this.bossWrap = el('div', { class: 'bossbar' }, this.bossName, el('div', { class: 'btrack' }, this.bossFill));
@@ -171,23 +181,67 @@ export class Hud {
       el('div', { class: 'ntext', text: 'Nothing more will happen unless you act.' }),
       el('div', { class: 'nrow' }, nRewind, nCut), nClose);
     this.verdictEl = el('div', { class: 'verdict panel', role: 'status' });
+    // display only (clicks pass through to the world): the armed calling, and notes that point at the bar
+    this.armedName = el('span', { class: 'aname' });
+    this.armedDesc = el('span', { class: 'adesc' });
+    this.armedLessonEl = el('div', { class: 'lesson' });
+    this.armedEl = el('div', { class: 'armed-info', role: 'status' }, this.armedName, ' ', this.armedDesc, this.armedLessonEl);
+    this.rewindTip = el('div', { class: 'rewind-tip', role: 'status' }, icon('rewind', 2), el('span'));
+    const notes = el('div', { class: 'hud-notes' }, this.rewindTip, this.armedEl);
     const bottom = el('div', { class: 'hud-bottom' }, bar, this.rewindBtn, this.projectBtn);
-    this.root = el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, this.noticeEl, this.verdictEl, bottom);
+    this.root = readOnly
+      ? el('div', { class: 'hud read-only' }, top, this.bossWrap)
+      : el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, this.noticeEl, this.verdictEl, notes, bottom);
     // HUD panels swallow pointer events so taps on buttons don't reach the world
     for (const p of [top, bottom, this.bossWrap, this.noticeEl]) p.addEventListener('pointerdown', (e) => e.stopPropagation());
     parent.append(this.root);
   }
 
-  hint(text: string, seconds = 6): void {
+  /** A line in the hint box for `seconds`; a `lesson` (an onboarding moment) is drawn a little louder. */
+  hint(text: string, seconds = 6, lesson = false): void {
     this.hintEl.textContent = text;
     this.hintEl.classList.add('show');
+    this.hintEl.classList.toggle('lesson', lesson);
     this.hintTimer = seconds;
+  }
+
+  hideHint(): void {
+    this.hintTimer = 0;
+    this.hintEl.classList.remove('show');
+  }
+
+  /** Something is in the hint box. */
+  get hintBusy(): boolean {
+    return this.hintTimer > 0;
+  }
+
+  /** The first-death lesson: a note above the bar, and the Rewind button pulses; null puts both away. */
+  rewindLesson(text: string | null, seconds = 8): void {
+    (this.rewindTip.lastChild as HTMLElement).textContent = text ?? '';
+    this.rewindTip.classList.toggle('show', text !== null);
+    this.rewindBtn.classList.toggle('teach', text !== null);
+    this.rewindTipTimer = text === null ? 0 : seconds;
+  }
+
+  /** The first-armed lesson, under the armed calling's description; null puts it away. */
+  armedLesson(text: string | null): void {
+    this.armedLessonEl.textContent = text ?? '';
+    this.armedLessonEl.classList.toggle('on', text !== null);
+  }
+
+  /** Make the pause / play button pulse (after the doom lesson: "press play to go on"). */
+  pulsePause(on: boolean): void {
+    this.pauseBtn.classList.toggle('teach', on);
   }
 
   tick(dt: number): void {
     if (this.hintTimer > 0) {
       this.hintTimer -= dt;
       if (this.hintTimer <= 0) this.hintEl.classList.remove('show');
+    }
+    if (this.rewindTipTimer > 0) {
+      this.rewindTipTimer -= dt;
+      if (this.rewindTipTimer <= 0) this.rewindLesson(null);
     }
   }
 
@@ -225,6 +279,11 @@ export class Hud {
       n.textContent = String(c);
       b.classList.toggle('armed', s.armed === k);
       b.classList.toggle('empty', c <= 0);
+    }
+    this.armedEl.classList.toggle('show', s.armed !== null);
+    if (s.armed) {
+      this.armedName.textContent = SKILL_INFO[s.armed].name;
+      this.armedDesc.textContent = SKILL_INFO[s.armed].desc;
     }
     const swap = (b: HTMLButtonElement, k: string) => {
       const old = b.querySelector('canvas');

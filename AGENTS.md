@@ -149,8 +149,9 @@ Data flow per frame (`PlayScene.update` then `render`):
 4. Iterate with `npm run level:png <id>`, which draws the solution's trails. Use
    `npm run level:trace <id> <nth>` for one Wyrdling, or `bosstrace.ts` for boss levels, until
    `npm test` passes.
-5. Look at it in the browser: open `/?level=<id>&vision&go` to watch the solution, or
-   `/?level=<id>&go` to play.
+5. Look at it in the browser: open `/?level=<id>&solution&go` to watch the whole scripted
+   solution (spindle steps too), `/?level=<id>&vision&go` to watch Skuld's Vision (the quota
+   route only), or `/?level=<id>&go` to play.
 
 ## Level design rules
 
@@ -188,8 +189,12 @@ see them. CI fails only on the enforced rules.
 
 These exist only in dev builds (`import.meta.env.DEV`). Production builds strip them.
 
-- URL parameters: `?level=<id>` opens a level, `&go` skips the intro card, and `&vision` replays
-  the solution.
+- URL parameters: `?level=<id>` opens a level and `&go` skips the intro card.
+  - `&solution` plays the level's whole scripted solution, spindle steps too, as a play attempt.
+    A scripted attempt is taught no lessons, so the first-doom pause never stops it.
+  - `&vision` plays Skuld's Vision: the quota-and-target route, without any spindle-only step.
+    `&tier=1`–`4` picks one stage of it (default 4, the whole route).
+  - Only `?level` and `&go` also work in production builds.
 - `window.__norns.scene()` returns the current `PlayScene`. Useful members:
   - `sim`: the live `Sim`. `sim.d` is its state; `sim.assign(id, skill)` grants a calling.
   - `debugHold = true` stops real-time ticking, without the pause dimming.

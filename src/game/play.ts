@@ -1,13 +1,14 @@
 // PlayScene: runs one level — fixed-step simulation, rewind timeline, foresight, input, camera,
-// HUD and view. Also powers attract mode and Skuld's Vision (scripted solution playback, or the
-// player's own best Weave). In play mode it records the attempt as a Weave, watches for a proven
-// stalemate, and while paused weighs the hovered calling's verdict.
+// HUD and view. Also powers attract mode and Skuld's Vision (the staged quota route, see vision.ts,
+// or the player's own best Weave). In play mode it records the attempt as a Weave, watches for a
+// proven stalemate, while paused weighs the hovered calling's verdict, and teaches by situation: each
+// onboarding lesson shows the first time its moment happens on a save (see Lesson).
 import { audio } from '../audio';
 import type { ArtBundle } from '../art/bundle';
 import type { Pipeline } from '../render/pipeline';
 import { SKILLS, SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
 import { bossPhase } from '../sim/boss';
-import { ForesightJob, VerdictJob, type Calling, type Fate, type Verdict } from '../sim/foresight';
+import { ForesightJob, VerdictJob, type Calling, type Fate, type FateEnd, type Verdict } from '../sim/foresight';
 import type { LevelDef } from '../sim/level';
 import { LoopDetector, type LoopProof } from '../sim/settle';
 import { Sim } from '../sim/sim';
@@ -19,14 +20,42 @@ import { Hud, type VerdictView } from '../ui/hud';
 import { Input } from './input';
 import { SoundMapper } from './sound';
 import { AttemptLog } from './stats';
-import { GameView } from './view';
+import { GameView, type MarkView } from './view';
+import { lingerTicks, planVision, playedMarks, shownMarks, visionRoute, type VisionMark, type VisionTier } from './vision';
 
 export type PlayMode = 'play' | 'attract' | 'vision';
+
+/** Onboarding moments, each taught once per save the first time it happens (Settings → Tutorial hints
+ *  turns them off): a Foresight skull (auto-pause and point at it), a death (Rewind), a calling armed
+ *  (hover to preview), the player's first pause, and the first sacrifice label. */
+export type Lesson = 'doom' | 'rewind' | 'armed' | 'pause' | 'sacrifice';
 
 /** Plays callings into the run before each step: Skuld's scripted solution, or a recorded Weave. */
 interface Script {
   apply(sim: Sim): ({ skill: SkillId; nth: number } | { skill: SkillId; id: number })[];
 }
+
+/** A staged Vision's callings: each planned mark granted on its own tick to its own Wyrdling. */
+class MarkScript implements Script {
+  constructor(private marks: VisionMark[]) {}
+  apply(sim: Sim): { skill: SkillId; id: number }[] {
+    const out: { skill: SkillId; id: number }[] = [];
+    for (const m of this.marks) if (m.tick === sim.d.tick && sim.assign(m.id, m.step.skill)) out.push({ skill: m.step.skill, id: m.id });
+    return out;
+  }
+}
+
+/** Level tips shown this session, per level id: Begin shows the next one (round again after the last),
+ *  and stopping a rewind the next one not yet seen. */
+const tipsShown = new Map<string, number>();
+
+/** How the doom lesson says a foreseen death. */
+const DOOM_VERBS: Record<string, string> = {
+  fall: 'fall', void: 'fall', water: 'drown', lava: 'burn', fire: 'burn', magma: 'burn', sweep: 'burn', fireball: 'burn', meteor: 'burn',
+};
+
+/** A phone or tablet: no pointer that can hover, so lessons say "hold a finger". */
+const noHover = (): boolean => typeof matchMedia === 'function' && matchMedia('(hover: none)').matches;
 
 export interface PlayConfig {
   level: LevelDef;
@@ -40,6 +69,8 @@ export interface PlayConfig {
   verdict: boolean;
   /** Vision mode: play this Weave (the player's own best) instead of Skuld's solution. */
   replay?: Weave;
+  /** Skuld's Vision (no replay): how much of the quota route it shows (see vision.ts); default 4, all of it. */
+  visionTier?: VisionTier;
 }
 
 export interface PlayResult {
@@ -61,6 +92,10 @@ export interface PlayHooks {
   dialogOpen(): boolean;
   restart(): void;
   foresightChanged(on: boolean): void;
+  /** Onboarding: this save has not been taught the lesson yet. */
+  fresh(key: Lesson): boolean;
+  /** Onboarding: the lesson is shown now, and never again on this save. */
+  learn(key: Lesson): void;
 }
 
 const BOSS_NAMES: Record<string, string> = { wyrm: 'The Gnawing Wyrm', jotunn: 'Hrímgrímnir, Frost Jötunn', herald: "Surtr's Herald" };
@@ -126,9 +161,22 @@ export class PlayScene {
   private camVY = 0;
   private userPanned = false;
   private time = 0;
-  private hintQueue: string[] = [];
-  private hintCooldown = 1.5;
   private impossibleShown = false;
+  /** a level tip waiting for the hint box to be free */
+  private pendingTip: string | null = null;
+  /** the hint box holds a lesson about being paused (doom, pause): it goes when the game runs again */
+  private pausedLesson = false;
+  /** the doom lesson: the skull it points at (until a calling is granted or the game runs again) */
+  private doomPointer: { x: number; y: number; id: number } | null = null;
+  /** the doom lesson paused the game and is waiting for a calling */
+  private doomPause = false;
+  /** seconds left on the armed lesson's line (shorter once a preview has been seen) */
+  private armedLessonT = 0;
+  /** Skuld's Vision: the marks this tier shows (the first `played` of them granted), and the tick a partial
+   *  Vision fades (null: plays to the end) */
+  private marks: VisionMark[] = [];
+  private played = 0;
+  private visionEnd: number | null = null;
   private visionCaption: { text: string; t: number } | null = null;
   private dpr = 1;
 
@@ -144,8 +192,21 @@ export class PlayScene {
     this.view = new GameView(p, art, this.sim);
     this.timeline = new Timeline();
     this.timeline.record(this.sim);
-    if (cfg.mode !== 'play') {
-      this.solution = cfg.replay ? new Replayer(cfg.replay) : new SolutionPlayer(cfg.level.solution);
+    if (cfg.mode === 'vision' && !cfg.replay) {
+      // the quota route, planned up front only as far as this tier shows: tiers 1-2 only point at its
+      // first calling, 3-4 play what they show
+      const tier = cfg.visionTier ?? 4;
+      const n = visionRoute(cfg.level).length;
+      const shown = shownMarks(tier, n);
+      this.marks = planVision(cfg.level, tier >= 3 ? shown : 0, shown);
+      this.played = Math.min(playedMarks(tier, n), this.marks.length);
+      this.solution = new MarkScript(this.marks.slice(0, this.played));
+      const last = this.marks[this.marks.length - 1];
+      if (tier < 4 && last) this.visionEnd = last.tick + lingerTicks(tier);
+      this.state = 'play';
+    } else if (cfg.mode !== 'play') {
+      // attract mode plays the quota route too: the spindle's way is never shown
+      this.solution = cfg.replay ? new Replayer(cfg.replay) : new SolutionPlayer(visionRoute(cfg.level));
       this.state = 'play';
     } else {
       this.recorder = new WeaveRecorder(cfg.level);
@@ -157,11 +218,12 @@ export class PlayScene {
     this.camX = (boss ? boss.x : e.x) - p.viewW / 2;
     this.camY = (boss ? boss.arena.floorY - 60 : e.y + 40) - p.viewH / 2;
     this.clampCam();
-    if (cfg.mode === 'play' && uiRoot) {
+    if (cfg.mode !== 'attract' && uiRoot) {
+      // Skuld's Vision gets the read-only HUD: counters, quota bar, boss bar, pause and speed
       this.hud = new Hud(uiRoot, art.icons, cfg.level.skills, {
         skill: (s) => this.selectSkill(s),
         disarm: () => this.disarm(),
-        pause: () => this.togglePause(),
+        pause: () => this.pauseInput(),
         step: (n) => this.stepTicks(n),
         speed: () => this.cycleSpeed(),
         rewind: (down) => this.rewindInput(down),
@@ -171,9 +233,7 @@ export class PlayScene {
         closeNotice: () => { this.noticeClosed = this.loops.loop; },
         restart: () => hooks.restart(),
         menu: () => hooks.menu(),
-      });
-      // level hints speak of the default hold mode
-      this.hintQueue = cfg.hints ? (cfg.level.hints ?? []).map((h) => cfg.rewindToggle ? h.replace('Hold REWIND', 'Tap REWIND') : h) : [];
+      }, cfg.mode === 'vision');
     }
     if (cfg.mode !== 'attract') this.bindInput();
   }
@@ -190,6 +250,66 @@ export class PlayScene {
     if (this.state === 'intro') {
       this.state = 'play';
       audio.sfx('level_start');
+      this.nextTip(true);
+    }
+  }
+
+  // ------------------------------------------------------------------ teaching
+
+  /** Queue the level's next tip (`again`: round to the first once all were shown this session). */
+  private nextTip(again: boolean): void {
+    const tips = this.cfg.level.hints ?? [];
+    if (!this.hud || this.cfg.mode !== 'play' || !this.cfg.hints || !tips.length) return;
+    const k = tipsShown.get(this.cfg.level.id) ?? 0;
+    if (!again && k >= tips.length) return;
+    tipsShown.set(this.cfg.level.id, k + 1);
+    // tips speak of the default hold mode
+    const t = tips[k % tips.length];
+    this.pendingTip = this.cfg.rewindToggle ? t.replace('Hold REWIND', 'Tap REWIND') : t;
+  }
+
+  /** True (and the lesson is spent) if this save has not been taught `key` and tutorial hints are on.
+   *  A scripted play mode (dev tooling) is taught nothing: the doom lesson's pause would stop the script. */
+  private teach(key: Lesson): boolean {
+    if (!this.hud || this.cfg.mode !== 'play' || this.solution || !this.cfg.hints || !this.hooks.fresh(key)) return false;
+    this.hooks.learn(key);
+    return true;
+  }
+
+  /** The first foreseen death a calling in hand could still change: pause and point at its skull. */
+  private teachDoom(): void {
+    if (!this.fate || !this.cfg.hints || !this.hooks.fresh('doom')) return;
+    const sim = this.sim;
+    let pick: { id: number; e: FateEnd } | null = null;
+    for (const [id, e] of this.fate.ends) {
+      const w = sim.d.wyrds[id];
+      if (e.kind !== 'dead' || !w || !SKILLS.some((s) => sim.canAssign(w, s))) continue;
+      if (!pick || e.t < pick.e.t) pick = { id, e };
+    }
+    if (!pick || !this.teach('doom')) return;
+    // the camera stays put: a click already on its way must still land where it was aimed
+    this.togglePause();
+    this.doomPause = true;
+    this.doomPointer = { x: pick.e.x, y: pick.e.y, id: pick.id };
+    this.pausedLesson = true;
+    this.hud!.hint(`This one will ${DOOM_VERBS[pick.e.cause ?? ''] ?? 'be lost'}. Choose a calling and tap it.`, 600, true);
+  }
+
+  /** The game runs again: lessons about being paused are done. */
+  private endPausedLessons(): void {
+    if (this.pausedLesson) this.hud?.hideHint();
+    this.pausedLesson = false;
+    this.doomPause = false;
+    this.doomPointer = null;
+    this.hud?.pulsePause(false);
+  }
+
+  /** The player's own pause (the HUD button, Space, P, a tick step): the first one says what a pause is for. */
+  pauseInput(): void {
+    this.togglePause();
+    if (this.paused && this.state === 'play' && this.teach('pause')) {
+      this.pausedLesson = true;
+      this.hud!.hint('Paused. You can still grant callings and look ahead.', 600, true);
     }
   }
 
@@ -230,7 +350,12 @@ export class PlayScene {
 
   private key(code: string, down: boolean, repeat: boolean): void {
     if (this.cfg.mode !== 'play') {
-      if (down && code === 'Escape') this.hooks.menu();
+      // the Vision's read-only HUD: pause and speed, and Esc for the menu
+      if (!down || repeat) return;
+      if (code === 'Escape') this.hooks.menu();
+      else if (this.hooks.dialogOpen()) return;
+      else if (code === 'Space' || code === 'KeyP') this.togglePause();
+      else if (code === 'KeyF') this.cycleSpeed();
       return;
     }
     if (code === 'Blur') { this.setRewind(false); this.projectKey = false; return; }
@@ -250,7 +375,7 @@ export class PlayScene {
     switch (code) {
       case 'Period': this.stepTicks(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? TICK_RATE : 1); break;
       case 'Comma': this.stepTicks(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? -TICK_RATE : -1); break;
-      case 'Space': case 'KeyP': this.togglePause(); break;
+      case 'Space': case 'KeyP': this.pauseInput(); break;
       case 'KeyF': this.cycleSpeed(); break;
       case 'KeyV': this.toggleForesight(); break;
       // Esc first puts an armed calling away; with nothing armed (or a dialog open) it is the menu key
@@ -266,6 +391,11 @@ export class PlayScene {
     this.armed = s;
     audio.sfx('select_skill');
     this.branchKey = '';
+    // the first calling armed: the preview it opens is the point of Foresight
+    if (this.cfg.foresight && this.teach('armed')) {
+      this.hud!.armedLesson(noHover() ? 'Hold a finger on a Wyrdling to see its new fate' : 'Hover a Wyrdling to see its new fate');
+      this.armedLessonT = 12;
+    }
   }
 
   /** Put the armed calling away; false if nothing was armed. */
@@ -282,6 +412,7 @@ export class PlayScene {
     this.paused = !this.paused;
     audio.sfx(this.paused ? 'pause' : 'unpause');
     audio.setPaused(this.paused);
+    if (!this.paused) this.endPausedLessons();
   }
 
   cycleSpeed(): void {
@@ -310,19 +441,25 @@ export class PlayScene {
     this.rewinding = on;
     audio.setRewinding(on);
     audio.sfx(on ? 'rewind_start' : 'rewind_end');
-    if (on) { this.rewinds++; this.rewindAcc = 0; this.rewindHeld = 0; }
-    else this.forgetFate();
+    if (on) { this.rewinds++; this.rewindAcc = 0; this.rewindHeld = 0; this.hud?.rewindLesson(null); }
+    else {
+      this.forgetFate();
+      // back to try again: the level's next tip, if one is still unread
+      this.nextTip(false);
+    }
   }
 
   private forgetFate(): void {
     this.fate = null; this.fateJob = null; this.branch = null; this.branchJob = null; this.branchKey = '';
+    // the doom lesson's skull belonged to the fate just forgotten
+    this.doomPointer = null;
   }
 
   /** Paused tick-stepping (`,` `.`; Shift for a second): forward does exactly a game-loop tick, back
    *  restores the previous snapshot (the last 5 s are kept per tick), undoing any calling made on it. */
   stepTicks(n: number): void {
     if (this.cfg.mode !== 'play' || this.state !== 'play' || this.rewinding) return;
-    if (!this.paused) this.togglePause();
+    if (!this.paused) this.pauseInput();
     if (n > 0) {
       for (let i = 0; i < n && !this.sim.d.finished; i++) this.tick(true);
     } else {
@@ -380,7 +517,13 @@ export class PlayScene {
     this.sim.step();
     this.timeline.record(this.sim);
     // the stalemate proof needs every tick; Vision and attract runs never show it
-    if (this.cfg.mode === 'play') this.loops.observe(this.sim);
+    if (this.cfg.mode === 'play') {
+      this.loops.observe(this.sim);
+      // the first death: Rewind undoes it, for free
+      if (this.sim.events.some((e) => e.type === 'death') && this.teach('rewind')) {
+        this.hud!.rewindLesson(`${this.cfg.rewindToggle ? 'Tap' : 'Hold'} to unspool time — it's free`, 9);
+      }
+    }
     this.view.handleEvents(this.sim.events, this.sim);
     if (sound && this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim.d.tick, this.camX, this.p.viewW);
   }
@@ -449,6 +592,14 @@ export class PlayScene {
       this.hud?.flashSkill(this.armed);
       this.forgetFate();
       if (this.sim.d.skills[this.armed] <= 0) this.armed = null;
+      // the doom lesson's calling is in: the pause it made is the player's to end
+      if (this.doomPause) {
+        this.doomPause = false;
+        // a lesson about being paused, even if the sacrifice lesson took the hint box in between: unpausing hides it
+        this.pausedLesson = true;
+        this.hud?.hint(noHover() ? 'Now press ▶ to play on.' : 'Now press ▶ (or Space) to play on.', 600, true);
+        this.hud?.pulsePause(true);
+      }
     } else {
       this.hud?.denySkill(this.armed);
       audio.sfx('assign_fail');
@@ -473,14 +624,17 @@ export class PlayScene {
   }
 
   private autoCamera(dt: number): void {
-    // demo modes and the opening seconds follow the action
+    // demo modes and the opening seconds follow the action; the Vision goes to its next mark
     const alive = this.sim.d.wyrds.filter(isAlive);
-    if (!alive.length) return;
+    const mark = this.marks.find((m) => this.sim.d.tick <= m.tick + TICK_RATE);
+    const goal = mark && mark.tick - this.sim.d.tick <= 6 * TICK_RATE ? { x: mark.x, y: mark.y - 10 } : null;
+    if (!alive.length && !goal) return;
     let sx = 0, sy = 0;
     for (const w of alive) { sx += w.x; sy += w.y; }
     let cx = sx / alive.length, cy = sy / alive.length;
     const b = this.sim.d.boss;
     if (b && b.hp > 0) { cx = cx * 0.5 + b.x * 0.5; cy = cy * 0.8 + (b.y - 40) * 0.2; }
+    if (goal) { cx = goal.x; cy = goal.y; }
     const tx = cx - this.p.viewW / 2, ty = cy - this.p.viewH / 2 - 10;
     const k = 1 - Math.pow(0.03, dt);
     this.camX += (tx - this.camX) * k;
@@ -521,14 +675,14 @@ export class PlayScene {
         if (!prev || prev.d.tick >= this.sim.d.tick) this.setRewind(false); // back at the start
         else { this.rewindAcc -= this.sim.d.tick - prev.d.tick; this.restore(prev); }
       }
-    } else if (this.state === 'play' && !this.paused && !this.debugHold && !this.sim.d.finished) {
+    } else if (this.state === 'play' && !this.paused && !this.debugHold && !this.over) {
       this.acc += dt * TICK_RATE * (this.cfg.mode === 'attract' ? 1 : this.speed);
       let steps = 0;
       while (this.acc >= 1 && steps < 12) {
         this.acc -= 1;
         steps++;
         this.tick(true);
-        if (this.sim.d.finished) break;
+        if (this.over) break;
       }
       if (this.acc > 4) this.acc = 0;
     }
@@ -552,10 +706,12 @@ export class PlayScene {
       if (this.cfg.foresight) this.updateForesight(budget, left);
       else { this.fate = null; this.branch = null; this.fateJob = null; this.branchJob = null; }
       this.updateVerdict(left);
+      // the first skull Foresight shows while the game runs
+      if (this.fate && this.fate.dead > 0 && this.state === 'play' && !this.paused) this.teachDoom();
     } else { this.fate = null; this.branch = null; this.verdictWant = null; }
 
-    // finish
-    if (this.sim.d.finished && this.state === 'play') {
+    // finish (a partial Vision fades once its last mark has been seen)
+    if (this.over && this.state === 'play') {
       if (this.cfg.mode === 'attract') {
         this.restartAttract();
       } else {
@@ -570,11 +726,15 @@ export class PlayScene {
     }
 
     // hints
-    if (this.hud) {
-      this.hud.tick(dt);
-      if (this.state !== 'intro' && this.hintQueue.length) {
-        this.hintCooldown -= dt;
-        if (this.hintCooldown <= 0) { this.hud.hint(this.hintQueue.shift()!, 6.5); this.hintCooldown = 7.5; }
+    this.hud?.tick(dt);
+    if (this.hud && this.cfg.mode === 'play') {
+      // a level tip waits for the hint box (a lesson or a reply to a click comes first)
+      if (this.pendingTip && this.state === 'play' && !this.hud.hintBusy) { this.hud.hint(this.pendingTip, 6.5); this.pendingTip = null; }
+      if (this.armedLessonT > 0) {
+        // once the new fate has been seen, the line has done its job
+        if (this.branch && this.branch.focus === this.hover && this.branch.skill === this.armed) this.armedLessonT = Math.min(this.armedLessonT, 2.5);
+        this.armedLessonT -= dt;
+        if (this.armedLessonT <= 0) this.hud.armedLesson(null);
       }
       const d = this.sim.d;
       const toCome = this.total - d.spawned;
@@ -590,12 +750,39 @@ export class PlayScene {
     return this.cfg.level.wyrdlings;
   }
 
+  /** The run is over: the level finished, or a partial Vision has shown what it shows. */
+  private get over(): boolean {
+    return this.sim.d.finished || (this.visionEnd !== null && this.sim.d.tick >= this.visionEnd);
+  }
+
   private restartAttract(): void {
     this.view.dispose();
     this.sim = Sim.create(this.cfg.level);
     this.view = new GameView(this.p, this.art, this.sim);
-    this.solution = new SolutionPlayer(this.cfg.level.solution);
+    this.solution = new SolutionPlayer(visionRoute(this.cfg.level));
     this.timeline.clear();
+  }
+
+  /** The Vision's marks on screen: one at a time, each counting down once the one before has happened and
+   *  saying NOW for a second after; marks granted together (same tick, same Wyrdling) share one marker. */
+  private markViews(): MarkView[] | undefined {
+    if (!this.marks.length) return undefined;
+    const t = this.sim.d.tick, named = (this.cfg.visionTier ?? 4) >= 2;
+    const out: MarkView[] = [];
+    let prev = -Infinity;
+    for (let i = 0; i < this.marks.length; i++) {
+      const m = this.marks[i];
+      if (i && m.tick !== this.marks[i - 1].tick) prev = this.marks[i - 1].tick;
+      if (t <= prev || t > m.tick + TICK_RATE) continue;
+      const name = SKILL_INFO[m.step.skill].name;
+      const secs = t < m.tick ? Math.ceil((m.tick - t) / TICK_RATE) : null;
+      // once a played mark happens, the grant's own popup names it
+      const label = named && (secs !== null || i >= this.played) ? name : null;
+      const same = out.find((v) => v.id === m.id && v.x === m.x && v.y === m.y);
+      if (same) { if (same.label && label) same.label += ` + ${label}`; continue; }
+      out.push({ x: m.x, y: m.y, id: m.id, label, secs, granted: secs === null && i < this.played, ghost: m.ghost });
+    }
+    return out;
   }
 
   /** Base fate and the hovered branch, within `budget` ms per job (`left()`: what the frame has left while paused). */
@@ -712,6 +899,11 @@ export class PlayScene {
     return true;
   }
 
+  /** Dev tooling (&solution): play the level's whole scripted solution, spindle steps too, as this attempt. */
+  debugSolution(): void {
+    this.solution = new SolutionPlayer(this.cfg.level.solution);
+  }
+
   /** Dev tooling (scripts/frames.mjs): advance exactly n ticks with the same per-tick work as update(). */
   debugAdvance(n: number): void {
     for (let i = 0; i < n && !this.sim.d.finished; i++) this.tick(false);
@@ -759,7 +951,14 @@ export class PlayScene {
       canAssign: this.hover !== null && this.armed !== null && this.sim.canAssign(this.sim.d.wyrds[this.hover], this.armed),
       fate: this.fate, branch: this.branch, showForesight: this.cfg.foresight && this.cfg.mode === 'play', rewinding: this.rewinding,
       projecting: this.projectKey || this.projectTouch, touch: !!this.hoverPt?.touch,
+      // the doom lesson's arrow, until its Wyrdling's new fate is on screen instead
+      pointer: this.doomPointer && !(this.branch && this.hover === this.doomPointer.id) ? this.doomPointer : null, marks: this.markViews(),
     });
+    // the first sacrifice label ("1 lost · 3 saved later") gets a word on what it means
+    if (this.view.sacrifice && this.teach('sacrifice')) {
+      this.pausedLesson = false;
+      this.hud!.hint('Lost first, saved later: this calling trades some Wyrdlings for others.', 8, true);
+    }
     this.p.post.rewind = this.rewindFx;
     this.p.post.pause = this.paused || this.state === 'intro' ? 1 : 0;
     this.p.post.flash = this.view.flash;
@@ -769,7 +968,8 @@ export class PlayScene {
       this.hud.update({
         name: this.cfg.level.name, out: this.sim.aliveCount, toCome: this.total - d.spawned, saved: d.saved,
         quota: this.cfg.level.quota, target: this.cfg.level.target, total: this.total,
-        spindle: this.sim.L.spindle ? d.spindle : null, skills: d.skills, armed: this.armed, paused: this.paused,
+        // armed: the calling stays armed under the results (Rewind from there keeps it), but its card goes
+        spindle: this.sim.L.spindle ? d.spindle : null, skills: d.skills, armed: this.state === 'done' ? null : this.armed, paused: this.paused,
         speed: this.speed, foresight: this.cfg.foresight, rewinding: this.rewinding, rewindToggle: this.cfg.rewindToggle,
         rewindSec: Math.max(0, (d.tick - this.timeline.oldestTick) / TICK_RATE),
         boss: b ? { hp: Math.max(0, b.hp), max: b.maxHp, name: BOSS_NAMES[b.kind] ?? b.kind } : null,
