@@ -376,7 +376,12 @@ function spikes(): Px {
   const key = { a: IRON[4], b: IRON[2], c: IRON[1], d: IRON[1], e: IRON[3] };
   stamp(p, unit, key, 0, 0);
   stamp(p, unit, key, 4, 0);
-  p.set(1, 0, IRON[5]); p.set(5, 0, IRON[5]);
+  // hot, blood-red tips: a hazard reads as danger in every realm, even blue-grey iron on Niflheim's ice
+  for (const x of [1, 5]) {
+    p.set(x, 0, RUNE[4]);
+    p.set(x, 1, RUNE[3]); p.set(x + 1, 1, RUNE[1]);
+    p.set(x, 2, mix(IRON[4], RUNE[3], 0.5)); p.set(x + 1, 2, mix(IRON[2], RUNE[1], 0.5));
+  }
   selout(p);
   return p;
 }

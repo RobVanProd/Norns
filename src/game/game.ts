@@ -9,10 +9,11 @@ import type { LevelDef } from '../sim/level';
 import { SolutionPlayer } from '../sim/solution';
 import type { Weave } from '../sim/weave';
 import { clear, el, pixelCanvas } from '../ui/dom';
+import { bindKey, defaultKeys, KEY_ACTIONS, keyName, keysName, reservedKey, type KeyAction, type KeyBinds } from './input';
 import { PlayScene, type PlayMode, type PlayResult } from './play';
 import {
-  BOSS_NEEDS, HOODS, UPGRADES, bestWeave, isUnlocked, loadSave, markSeen, offerWeave, realmUnlocked, recordOutcome, starCount, totalStars, writeSave,
-  type SaveData,
+  BOSS_NEEDS, HOODS, TEXT_SIZES, TOUCH_REACH, UPGRADES, bestWeave, isUnlocked, loadSave, markSeen, offerWeave, realmUnlocked, recordOutcome, starCount,
+  totalStars, writeSave, type SaveData,
 } from './save';
 import { eraseStats, levelStats, loadStats, logFinish, logQuit, playtestReport, writeStats, type QuitPoint, type Stats } from './stats';
 import { setHood } from './view';
@@ -26,6 +27,11 @@ const VISION_FADES: Record<1 | 2 | 3, string> = {
 };
 
 type Screen = 'title' | 'map' | 'play' | 'loom';
+
+/** The first key of an action, as players read it ('—' if it has none). */
+function firstKey(keys: KeyBinds, a: KeyAction): string {
+  return keys[a][0] ? keyName(keys[a][0]) : '—';
+}
 
 export class Game {
   readonly p: Pipeline;
@@ -43,6 +49,8 @@ export class Game {
   private last = performance.now();
   private captionEl: HTMLElement;
   private dpr = Math.min(window.devicePixelRatio || 1, 3);
+  /** the realm-unsealed stinger waiting for the victory one to finish */
+  private unlockTimer = 0;
 
   constructor(p: Pipeline, art: ArtBundle, ui: HTMLElement) {
     this.p = p;
@@ -51,6 +59,7 @@ export class Game {
     this.save = loadSave();
     this.stats = loadStats();
     setHood(this.save.hood);
+    this.applyDisplay();
     p.zoomOffset = this.save.settings.zoom;
     audio.setVolumes({ music: this.save.settings.music, sfx: this.save.settings.sfx });
     this.screenEl = el('div', { class: 'screen' });
@@ -99,6 +108,13 @@ export class Game {
     const ui = Math.max(1, Math.min(3, Math.floor(Math.min(h / 720, w / 1280) * 4) / 4));
     this.ui.style.setProperty('--ui', String(ui));
     this.fitTitleLogo();
+  }
+
+  /** Settings that live in the page itself: calmer CSS motion, and the text size every font size scales by. */
+  private applyDisplay(): void {
+    const s = this.save.settings, root = document.documentElement;
+    root.classList.toggle('calm', s.reduceMotion);
+    root.style.setProperty('--ts', String(TEXT_SIZES.includes(s.textSize) ? s.textSize : 1));
   }
 
   /** Largest whole-pixel logo scale (1-3) that leaves room for the menu and footer. */
@@ -189,6 +205,7 @@ export class Game {
       level, mode, replay, visionTier,
       horizonSec: UPGRADES.foresight.levels[this.save.upgrades.foresight],
       foresight: s.foresight, hints: s.hints, rewindToggle: s.rewindToggle, verdict: s.verdict,
+      keys: s.keys, reduceMotion: s.reduceMotion, touchReach: clampReach(s.touchReach),
     }, {
       finished: (r) => this.results(r),
       menu: () => this.pauseMenu(),
@@ -225,10 +242,17 @@ export class Game {
     const box = el('div', { class: 'title-screen' },
       el('div', { class: 'logo-wrap' }, logo),
       el('div', { class: 'menu' }, play, loom, settings),
-      el('div', { class: 'foot', text: 'Mouse, touch or keyboard · 1–9 callings · Space pause · R rewind · V foresight' }),
+      el('div', { class: 'foot', text: this.keysLine() }),
     );
     this.screenEl.append(box);
     this.fitTitleLogo();
+  }
+
+  /** The title screen's line on the keys, as bound. */
+  private keysLine(): string {
+    const k = this.save.settings.keys;
+    return `Mouse, touch or keyboard · ${firstKey(k, 'slot1')}–${firstKey(k, 'slot9')} callings · ${firstKey(k, 'pause')} pause`
+      + ` · ${firstKey(k, 'rewind')} rewind · ${firstKey(k, 'foresight')} foresight`;
   }
 
   /** The story, on one card. The very first launch goes from it straight into the first level; the map
@@ -297,6 +321,8 @@ export class Game {
   /** Open a level: to play, or to watch Skuld's Vision at a tier (or, with `replay`, the player's own best Weave). */
   playLevel(level: LevelDef, mode: PlayMode = 'play', replay?: Weave, tier?: VisionTier): void {
     this.screen = 'play';
+    // a realm's stinger belongs to the results and the map, not to the next level's opening
+    clearTimeout(this.unlockTimer);
     this.current = level;
     clear(this.screenEl);
     if (mode === 'vision' && !replay) {
@@ -407,6 +433,7 @@ export class Game {
         el('p', { text }), this.row(buttons)));
       return;
     }
+    const sealed = REALM_LIST.map((_, i) => !realmUnlocked(this.save, i));
     const out = recordOutcome(this.save, {
       levelId: level.id, saved: r.saved, quota: level.quota, target: level.target, spindle: r.spindle, bossDefeated: r.bossDefeated,
     });
@@ -418,6 +445,9 @@ export class Game {
     if (this.scene.log) logFinish(this.stats, level.id, this.scene.log, (out.mask & 1) === 1, r.weave);
     const won = (out.mask & 1) === 1;
     audio.stinger(won ? 'victory' : 'defeat');
+    const unsealed = REALM_LIST.filter((_, i) => sealed[i] && realmUnlocked(this.save, i));
+    // a realm opening gets its own fanfare, once the victory one (two bars at 120 bpm) is over
+    if (unsealed.length) this.unlockTimer = window.setTimeout(() => audio.stinger('unlock'), 4100);
     if (won && level === ALL_LEVELS[ALL_LEVELS.length - 1]) setTimeout(() => audio.playMusic('finale'), 2500);
     const stars = el('div', { class: 'big-stars' });
     const hasSpindle = level.entities.some((e) => e.type === 'spindle');
@@ -452,6 +482,7 @@ export class Game {
     ];
     if (r.rewinds) lines.push(el('div', { class: 'stat' }, el('span', { text: 'Rewinds' }), el('b', { text: `${r.rewinds} (free!)` })));
     if (out.threads) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Threads earned' }), el('b', { text: `+${out.threads}` })));
+    for (const r of unsealed) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Realm unsealed' }), el('b', { class: 'name', text: r.name })));
     for (const id of out.opened) {
       const l = ALL_LEVELS.find((x) => x.id === id);
       if (l) lines.push(el('div', { class: 'stat gain' }, el('span', { text: 'Now open' }), el('b', { class: 'name', text: l.name })));
@@ -608,9 +639,25 @@ export class Game {
       if (this.scene) this.scene.cfg.rewindToggle = s.rewindToggle;
       writeSave(this.save);
     });
+    const text = el('select', { 'aria-label': 'Text size' });
+    for (const v of TEXT_SIZES) {
+      const o = el('option', { value: v, text: `${Math.round(v * 100)}%` });
+      if (s.textSize === v) o.selected = true;
+      text.append(o);
+    }
+    text.addEventListener('change', () => { s.textSize = Number(text.value); this.applyDisplay(); writeSave(this.save); });
+    const reach = el('input', { type: 'range', min: TOUCH_REACH.min, max: TOUCH_REACH.max, step: 1, value: clampReach(s.touchReach), 'aria-label': 'Touch reach' });
+    const reachVal = el('span', { class: 'val', text: String(clampReach(s.touchReach)) });
+    reach.addEventListener('input', () => {
+      s.touchReach = Number(reach.value);
+      reachVal.textContent = reach.value;
+      if (this.scene) this.scene.cfg.touchReach = s.touchReach;
+    });
     const done = el('button', { class: 'btn gold', text: 'Done' });
     const close = () => { writeSave(this.save); this.closeModal(); back?.(); };
     done.addEventListener('click', () => { audio.sfx('ui_click'); close(); });
+    const keys = el('button', { class: 'btn', text: 'Keys' });
+    keys.addEventListener('click', () => { audio.sfx('ui_click'); writeSave(this.save); this.keysPanel(() => this.settings(back)); });
     const fs = el('button', { class: 'btn', text: 'Fullscreen' });
     fs.addEventListener('click', () => { void document.documentElement.requestFullscreen?.().catch(() => undefined); });
     const reset = el('button', { class: 'btn danger', text: 'Erase progress' });
@@ -658,10 +705,88 @@ export class Game {
           el('h3', { text: 'Assists' }),
           toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
           toggle('Verdict', s.verdict, (v) => { s.verdict = v; if (this.scene) this.scene.cfg.verdict = v; },
-            'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'))),
-      el('div', { class: 'row' }, fs, copy, reset),
+            'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'),
+          el('h3', { text: 'Access' }),
+          toggle('Reduce motion', s.reduceMotion, (v) => {
+            s.reduceMotion = v;
+            this.applyDisplay();
+            if (this.scene) { this.scene.cfg.reduceMotion = v; this.scene.settingsChanged(); }
+          }, 'No screen shake or flashes, a still backdrop, calmer menus'),
+          el('label', { class: 'set' }, el('span', { text: 'Text size' }), text),
+          el('label', { class: 'set', title: 'How close a finger must land to a Wyrdling to pick it' },
+            el('span', { text: 'Touch reach' }), el('span', { class: 'range' }, reach, reachVal)))),
+      el('div', { class: 'row' }, keys, fs, copy, reset),
       copied,
       el('div', { class: 'row' }, done)), close);
+  }
+
+  /** Settings → Keys: rebind the callings' slots, pause, rewind, speed, Foresight and the tick steps. Press a
+   *  key's button, then the new key; a key already in use moves over (and the action that had it takes the
+   *  old one if it would be left with none). */
+  private keysPanel(back: () => void): void {
+    const keys = this.save.settings.keys;
+    let capturing: { a: KeyAction; b: HTMLButtonElement } | null = null;
+    const note = el('p', { class: 'flavor keys-note', role: 'status',
+      text: 'Fixed: Esc (put away, menu) · arrows / WASD (camera, unless bound here) · Q (look further) · + − (zoom) · Shift with a step (a second)' });
+    const grid = el('div', { class: 'keys-grid' });
+    const buttons = new Map<KeyAction, HTMLButtonElement>();
+    const changed = () => {
+      writeSave(this.save);
+      this.scene?.settingsChanged();
+      // the title screen's line on the keys, if it is under the dialog
+      const foot = this.screenEl.querySelector('.title-screen .foot');
+      if (foot) foot.textContent = this.keysLine();
+      for (const [a, b] of buttons) { b.textContent = keysName(keys, a); b.setAttribute('aria-label', `${KEY_ACTIONS.find((k) => k.id === a)!.label}: ${keysName(keys, a)}`); }
+    };
+    const stop = () => {
+      capturing?.b.classList.remove('listening');
+      capturing = null;
+    };
+    for (const { id, label } of KEY_ACTIONS) {
+      const b = el('button', { class: 'btn small keybtn' });
+      b.addEventListener('click', () => {
+        audio.sfx('ui_click');
+        stop();
+        capturing = { a: id, b };
+        b.classList.add('listening');
+        b.textContent = 'Press a key…';
+        note.textContent = `${label}: press the new key · Esc keeps ${keysName(keys, id)}`;
+      });
+      buttons.set(id, b);
+      grid.append(el('span', { class: 'klabel', text: label }), b);
+    }
+    // ahead of the game's own key handling, and only while a button is listening
+    const onKey = (e: KeyboardEvent) => {
+      if (!grid.isConnected) { window.removeEventListener('keydown', onKey, true); return; }
+      if (!capturing) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const { a } = capturing;
+      const label = KEY_ACTIONS.find((k) => k.id === a)!.label;
+      if (e.code === 'Escape') { stop(); changed(); note.textContent = `${label} stays on ${keysName(keys, a)}`; return; }
+      if (reservedKey(e.code)) { audio.sfx('ui_deny'); note.textContent = `${keyName(e.code)} keeps its own meaning: choose another key for ${label}`; return; }
+      const other = bindKey(keys, a, e.code);
+      stop();
+      changed();
+      audio.sfx('ui_click');
+      const lost = other && KEY_ACTIONS.find((k) => k.id === other)!.label;
+      // say where the action that gave up the key went
+      note.textContent = `${label} → ${keyName(e.code)}${!other ? '' : keys[other].length ? ` · ${lost} → ${keysName(keys, other)}` : ` · ${lost} has no key now`}`;
+    };
+    window.addEventListener('keydown', onKey, true);
+    changed();
+    const reset = el('button', { class: 'btn', text: 'Reset keys' });
+    reset.addEventListener('click', () => {
+      audio.sfx('ui_click');
+      stop();
+      Object.assign(keys, defaultKeys());
+      changed();
+      note.textContent = 'Keys are back to their defaults.';
+    });
+    const done = el('button', { class: 'btn gold', text: 'Back' });
+    const close = () => { stop(); window.removeEventListener('keydown', onKey, true); this.closeModal(); back(); };
+    done.addEventListener('click', () => { audio.sfx('ui_back'); close(); });
+    this.openModal(el('div', { class: 'panel modal settings keys' }, el('h2', { text: 'Keys' }), grid, note, el('div', { class: 'row' }, reset, done)), close);
   }
 
   // ------------------------------------------------------------------ modal
@@ -704,6 +829,10 @@ function missedStars(level: LevelDef, r: PlayResult, mask: number): string[] {
     out.push(r.spindle ? `Golden Spindle: found, but ${lostBy}` : 'Golden Spindle: not collected');
   }
   return out;
+}
+
+function clampReach(v: number): number {
+  return Number.isFinite(v) ? Math.max(TOUCH_REACH.min, Math.min(TOUCH_REACH.max, Math.round(v))) : TOUCH_REACH.def;
 }
 
 function fmtTime(ticks: number): string {

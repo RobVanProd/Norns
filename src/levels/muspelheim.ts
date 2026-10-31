@@ -188,7 +188,7 @@ export const U4: LevelDef = {
     // dropping over the lip pass 7 px from it
     { type: 'spindle', x: 313, y: 251 },
     { type: 'decor', sprite: 'brazier', x: 60, y: 227 },
-    { type: 'decor', sprite: 'banner', x: 300, y: 70 },
+    { type: 'decor', sprite: 'banner', x: 300, y: 56 },
     { type: 'decor', sprite: 'brazier', x: 440, y: 227 },
     { type: 'decor', sprite: 'brazier', x: 600, y: 227 },
   ],

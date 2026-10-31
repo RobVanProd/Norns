@@ -83,7 +83,7 @@ export const M2: LevelDef = {
     { type: 'spindle', x: 179, y: 139 },
     { type: 'decor', sprite: 'mushroom', x: 90, y: 150 },
     { type: 'decor', sprite: 'runestone', x: 340, y: 150 },
-    { type: 'decor', sprite: 'banner', x: 400, y: 60 },
+    { type: 'decor', sprite: 'banner', x: 220, y: 0 },
   ],
   solution: [
     { nth: 0, x: 286, dir: 1, skill: 'weaver', purpose: ['quota', 'target'] },
@@ -125,7 +125,7 @@ export const M3: LevelDef = {
     { type: 'decor', sprite: 'torch', x: 280, y: 150 },
     { type: 'decor', sprite: 'torch', x: 120, y: 150 },
     { type: 'decor', sprite: 'torch', x: 420, y: 150 },
-    { type: 'decor', sprite: 'banner', x: 380, y: 60 },
+    { type: 'decor', sprite: 'banner', x: 380, y: 59 },
   ],
   solution: [
     // a Warden anywhere between the drop and the entrance meets the quota and the target; on the plate it
@@ -207,7 +207,7 @@ export const M3C: LevelDef = {
     { type: 'spindle', x: 63, y: 190 },
     { type: 'decor', sprite: 'mushroom', x: 100, y: 191 },
     { type: 'decor', sprite: 'runestone', x: 260, y: 249 },
-    { type: 'decor', sprite: 'banner', x: 300, y: 120 },
+    { type: 'decor', sprite: 'banner', x: 300, y: 26 },
   ],
   solution: [
     { nth: 0, skill: 'climber', purpose: ['quota', 'target'] },
@@ -294,7 +294,7 @@ export const M4: LevelDef = {
     { type: 'spindle', x: 292, y: 104 },
     { type: 'decor', sprite: 'mushroom', x: 30, y: 143 },
     { type: 'decor', sprite: 'runestone', x: 100, y: 143 },
-    { type: 'decor', sprite: 'banner', x: 300, y: 120 },
+    { type: 'decor', sprite: 'banner', x: 80, y: 44 },
   ],
   solution: [
     { nth: 0, skill: 'climber', purpose: ['quota', 'target'] },
@@ -341,7 +341,7 @@ export const M5: LevelDef = {
     { type: 'seidr', x: 500, y: 207 },
     { type: 'decor', sprite: 'torch', x: 60, y: 230 },
     { type: 'decor', sprite: 'torch', x: 300, y: 230 },
-    { type: 'decor', sprite: 'banner', x: 230, y: 50 },
+    { type: 'decor', sprite: 'banner', x: 230, y: 43 },
   ],
   boss: {
     kind: 'wyrm', x: 572, y: 132, hp: 5, delay: 150, arena: { x0: 12, x1: 512, floorY: 239 },

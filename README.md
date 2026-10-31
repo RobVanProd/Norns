@@ -77,7 +77,7 @@ for a second star, and find the Golden Spindle for a third.
   and hover a Wyrdling (on touch, press and hold) to see the branched future before you commit.
   Above, granting Weaver at the gorge edge would leave 2 fewer Wyrdlings lost, so the label is
   green.
-- **Verðandi's callings.** Grant skills, pause, and fast-forward at 2× or 4×.
+- **Verðandi's callings.** Grant skills, pause, step tick by tick, and play at 2×, 4× or ½×.
 - **Urðr's Rewind.** Hold to unspool time, as far back as the start of the level. Rewinding is
   never penalised, so experimenting is free. If holding is awkward, set Settings → Rewind to
   Toggle: one press starts it and the next stops it.
@@ -87,33 +87,41 @@ deterministic, so Foresight also predicts exactly who an attack will hit.
 
 ### Callings
 
-| Key | Calling | What it does |
-|---|---|---|
-| `1` | Digger | Digs straight down through soft ground. |
-| `2` | Weaver | Weaves 12 golden planks: a rising bridge. |
-| `3` | Warden | Stands firm and turns others back. |
-| `4` | Basher | Tunnels straight ahead. |
-| `5` | Miner | Tunnels diagonally downward. |
-| `6` | Climber | Permanent: scales vertical walls (not smooth rune-iron). |
-| `7` | Glider | Permanent: glides safely from any height and rides updrafts. |
-| `8` | Leaper | One big jump forward over a gap. |
-| `9` | Rune Blast | Plants a rune that bursts 3 s later, carving rock and flinging things. The planter walks on. |
+A level's bar shows its callings in this order. Keys `1`–`9` follow the bar: `1` is always its
+leftmost calling.
+
+| Calling | What it does |
+|---|---|
+| Digger | Digs straight down through soft ground. |
+| Weaver | Weaves 12 golden planks: a rising bridge. |
+| Warden | Stands firm and turns others back. |
+| Basher | Tunnels straight ahead. |
+| Miner | Tunnels diagonally downward. |
+| Climber | Permanent: scales vertical walls (not smooth rune-iron). |
+| Glider | Permanent: glides safely from any height and rides updrafts. |
+| Leaper | One big jump forward over a gap. |
+| Rune Blast | Plants a rune that bursts 3 s later, carving rock and flinging things. The planter walks on. |
 
 ### Controls
 
 | Action | Mouse / keyboard | Touch |
 |---|---|---|
-| Choose a calling | click the bar, or press `1`–`9` | tap the bar |
+| Choose a calling | click the bar, or press `1`–`9` (left to right along the bar) | tap the bar |
 | Grant it | press on a Wyrdling (it applies the moment you click) | tap a Wyrdling; press and hold to preview its fate first |
 | Put the calling away | `Esc` or right-click | tap the × on the armed calling |
 | Pan | drag empty space, arrow keys or WASD, mouse wheel | drag |
 | Zoom | `+` / `-`, or Ctrl + wheel | pinch |
 | Pause | `Space` or `P` | pause button |
 | Step one tick while paused | `,` back / `.` forward (with Shift: one second) | ◀ / ▶ beside the pause button |
-| Fast-forward 1× / 2× / 4× | `F` | speed button |
+| Speed 1× / 2× / 4× / ½× | `F` | speed button |
 | Rewind | hold `R` (or Backspace); in Toggle mode press once to start, again to stop | hold ◀◀; in Toggle mode tap to start, tap to stop |
 | Foresight on/off | `V` | eye button |
 | Menu | `Esc` (when no calling is armed) | home button |
+
+Settings → Keys rebinds the calling slots, pause, rewind, speed, Foresight and the tick steps (a key
+already in use moves over). Settings → Access has Reduce motion (no screen shake or flashes and a
+still backdrop; it starts on if your system asks for reduced motion), a text size and how far from a
+Wyrdling a finger may land and still pick it.
 
 ## Three realms, eighteen levels, three bosses
 

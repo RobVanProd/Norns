@@ -422,7 +422,7 @@ function stepHazards(sim: Sim): void {
     if (h.gone) continue;
     h.t++;
     const active = h.t >= h.warn && h.t < h.warn + h.dur;
-    if (h.t === h.warn) sim.emit('hazard_' + h.kind, (h.x0 + h.x1) / 2, (h.y0 + h.y1) / 2, undefined, h.kind);
+    if (h.t === h.warn) sim.emit(`hazard_${h.kind}`, (h.x0 + h.x1) / 2, (h.y0 + h.y1) / 2, undefined, h.kind);
     switch (h.kind) {
       case 'burrow':
         if (h.t === h.warn) {

@@ -1,9 +1,21 @@
 // In-level HUD: counters, quota bar, boss health, skill bar, time controls, hints, fate summary, the
 // stalemate notice and the paused verdict. Above the skill bar: the armed calling's name and what it
 // does, and the onboarding notes that belong down there (Rewind, hover to preview). Skuld's Vision
-// gets a read-only HUD: counters, quota bar, boss bar, pause and speed.
+// gets a read-only HUD: counters, quota bar, boss bar, pause and speed. Every button carries an aria
+// label naming its key, kept up to date with the bindings and with what the button would do now.
+import { keysName, SLOT_ACTIONS, type KeyAction, type KeyBinds } from '../game/input';
 import { SKILLS, SKILL_INFO, type SkillId } from '../sim/constants';
 import { el, pixelCanvas } from './dom';
+
+/** The callings on a level's bar, left to right: slot keys 1-9 arm them in this order. */
+export function barSlots(available: Partial<Record<SkillId, number>>): SkillId[] {
+  return SKILLS.filter((s) => available[s] !== undefined);
+}
+
+/** A speed as the HUD writes it. */
+export function speedName(speed: number): string {
+  return speed === 0.5 ? '½×' : `${speed}×`;
+}
 
 export interface HudCallbacks {
   skill(s: SkillId): void;
@@ -60,7 +72,12 @@ export interface VerdictView {
 
 export class Hud {
   readonly root: HTMLDivElement;
-  private skillBtns = new Map<SkillId, { b: HTMLButtonElement; n: HTMLSpanElement }>();
+  private skillBtns = new Map<SkillId, { b: HTMLButtonElement; n: HTMLSpanElement; key: HTMLSpanElement; slot: KeyAction }>();
+  private stepBack: HTMLButtonElement;
+  private stepFwd: HTMLButtonElement;
+  private bannerEl: HTMLDivElement;
+  private bannerTimer = 0;
+  private keys: KeyBinds;
   private name: HTMLDivElement;
   private outEl: HTMLSpanElement;
   private savedEl: HTMLSpanElement;
@@ -90,8 +107,10 @@ export class Hud {
   private last = '';
 
   /** `readOnly` (Skuld's Vision): counters, quota bar, boss bar, pause and speed, and nothing to grant with. */
-  constructor(parent: HTMLElement, icons: Record<string, HTMLCanvasElement>, available: Partial<Record<SkillId, number>>, cb: HudCallbacks, readOnly = false) {
+  constructor(parent: HTMLElement, icons: Record<string, HTMLCanvasElement>, available: Partial<Record<SkillId, number>>, cb: HudCallbacks,
+    keys: KeyBinds, readOnly = false) {
     this.icons = icons;
+    this.keys = keys;
     const icon = (k: string, s = 2) => pixelCanvas(icons[k], s, 'px icon');
     this.name = el('div', { class: 'hud-name' });
     this.outEl = el('span', { class: 'num' });
@@ -111,11 +130,11 @@ export class Hud {
     };
     this.pauseBtn = btn('pause', 'Pause (Space)', () => cb.pause());
     // shown only while paused (see .hud.paused in style.css)
-    const stepBack = btn('arrow_left', 'Step back one tick (,)', () => cb.step(-1));
-    const stepFwd = btn('arrow_right', 'Step forward one tick (.)', () => cb.step(1));
+    const stepBack = this.stepBack = btn('arrow_left', 'Step back one tick', () => cb.step(-1));
+    const stepFwd = this.stepFwd = btn('arrow_right', 'Step forward one tick', () => cb.step(1));
     stepBack.classList.add('step'); stepFwd.classList.add('step');
-    this.speedBtn = btn('fast', 'Speed (F)', () => cb.speed());
-    this.eyeBtn = btn('eye', "Skuld's Foresight (V)", () => cb.foresight());
+    this.speedBtn = btn('fast', 'Speed', () => cb.speed());
+    this.eyeBtn = btn('eye', "Skuld's Foresight", () => cb.foresight());
     const restartBtn = btn('restart', 'Restart', () => cb.restart());
     const menuBtn = btn('home', 'Menu (Esc)', () => cb.menu());
     const controls = readOnly ? el('div', { class: 'controls panel' }, this.pauseBtn, this.speedBtn)
@@ -126,22 +145,21 @@ export class Hud {
     this.fateEl = el('div', { class: 'fate' });
     const top = el('div', { class: 'hud-top' }, this.name, counters, controls);
 
-    const bar = el('div', { class: 'skillbar panel' });
-    for (const s of SKILLS) {
-      if (available[s] === undefined) continue;
+    const bar = el('div', { class: 'skillbar panel', role: 'toolbar', 'aria-label': 'Callings' });
+    barSlots(available).forEach((s, i) => {
       const n = el('span', { class: 'count' });
+      const key = el('span', { class: 'key' });
       // shown only on the armed card (see .skill.armed .x in style.css): the touch way to put a calling away
       const x = el('span', { class: 'x', title: 'Put away (Esc or right-click)', text: '×' });
-      const b = el('button', { class: 'skill', title: `${SKILL_INFO[s].name} (${SKILL_INFO[s].key}) — ${SKILL_INFO[s].desc}`, 'aria-label': SKILL_INFO[s].name },
-        icon(s, 3), n, el('span', { class: 'key', text: SKILL_INFO[s].key }), el('span', { class: 'sname', text: SKILL_INFO[s].name }), x);
+      const b = el('button', { class: 'skill' }, icon(s, 3), n, key, el('span', { class: 'sname', text: SKILL_INFO[s].name }), x);
       b.addEventListener('click', (e) => {
         e.stopPropagation();
         if (e.target === x && b.classList.contains('armed')) cb.disarm(); else cb.skill(s);
       });
       bar.append(b);
-      this.skillBtns.set(s, { b, n });
-    }
-    this.rewindBtn = el('button', { class: 'rewind', title: 'Hold to rewind (R)', 'aria-label': 'Rewind' }, icon('rewind', 3), el('span', { class: 'rsec' }));
+      this.skillBtns.set(s, { b, n, key, slot: SLOT_ACTIONS[i] });
+    });
+    this.rewindBtn = el('button', { class: 'rewind' }, icon('rewind', 3), el('span', { class: 'rsec' }));
     const start = (e: PointerEvent) => {
       e.preventDefault(); e.stopPropagation();
       // only a touch or the left button: a right-click must not flip a toggled rewind
@@ -154,7 +172,7 @@ export class Hud {
     this.rewindBtn.addEventListener('pointerleave', stop);
     this.rewindBtn.addEventListener('contextmenu', (e) => e.preventDefault());
     // touch stand-in for holding Q: one finger holds a Wyrdling, the other holds this (touch screens only, see CSS)
-    this.projectBtn = el('button', { class: 'project', title: 'Hold to look 15 s ahead (Q)', 'aria-label': 'Look further ahead' }, icon('eye', 2), el('span', { class: 'psec', text: '15s' }));
+    this.projectBtn = el('button', { class: 'project', title: 'Hold to look 15 s ahead (Q)', 'aria-label': 'Hold to look 15 seconds ahead' }, icon('eye', 2), el('span', { class: 'psec', text: '15s' }));
     const pOn = (e: Event) => { e.preventDefault(); e.stopPropagation(); this.projectBtn.classList.add('on'); cb.project(true); };
     const pOff = (e: Event) => { e.preventDefault(); this.projectBtn.classList.remove('on'); cb.project(false); };
     this.projectBtn.addEventListener('pointerdown', pOn);
@@ -162,7 +180,7 @@ export class Hud {
     this.projectBtn.addEventListener('contextmenu', (e) => e.preventDefault());
     this.hintEl = el('div', { class: 'hint' });
     // a proven stalemate: honest about what is known (nothing changes by itself), never "lost"
-    const nRewind = el('button', { class: 'btn small', text: 'Rewind' });
+    const nRewind = el('button', { class: 'btn small', text: 'Rewind', 'aria-label': 'Rewind' });
     nRewind.addEventListener('pointerdown', (e) => {
       e.preventDefault(); e.stopPropagation();
       if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -173,9 +191,9 @@ export class Hud {
       window.addEventListener('pointerup', up);
       window.addEventListener('pointercancel', up);
     });
-    const nCut = el('button', { class: 'btn small', text: 'Cut the Threads' });
+    const nCut = el('button', { class: 'btn small', text: 'Cut the Threads', 'aria-label': 'Cut the Threads: end the level now' });
     nCut.addEventListener('click', (e) => { e.stopPropagation(); cb.cut(); });
-    const nClose = el('button', { class: 'nclose', title: 'Keep playing', 'aria-label': 'Close', text: '×' });
+    const nClose = el('button', { class: 'nclose', title: 'Keep playing', 'aria-label': 'Close this notice and keep playing', text: '×' });
     nClose.addEventListener('click', (e) => { e.stopPropagation(); cb.closeNotice(); });
     this.noticeEl = el('div', { class: 'notice panel', role: 'status' },
       el('div', { class: 'ntext', text: 'Nothing more will happen unless you act.' }),
@@ -189,12 +207,37 @@ export class Hud {
     this.rewindTip = el('div', { class: 'rewind-tip', role: 'status' }, icon('rewind', 2), el('span'));
     const notes = el('div', { class: 'hud-notes' }, this.rewindTip, this.armedEl);
     const bottom = el('div', { class: 'hud-bottom' }, bar, this.rewindBtn, this.projectBtn);
+    // level-wide news ('QUOTA MET!'): in screen space, so the edge of the view never cuts it off
+    this.bannerEl = el('div', { class: 'hud-banner', role: 'status' });
     this.root = readOnly
-      ? el('div', { class: 'hud read-only' }, top, this.bossWrap)
-      : el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, this.noticeEl, this.verdictEl, notes, bottom);
+      ? el('div', { class: 'hud read-only' }, top, this.bossWrap, this.bannerEl)
+      : el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, this.noticeEl, this.verdictEl, this.bannerEl, notes, bottom);
     // HUD panels swallow pointer events so taps on buttons don't reach the world
     for (const p of [top, bottom, this.bossWrap, this.noticeEl]) p.addEventListener('pointerdown', (e) => e.stopPropagation());
     parent.append(this.root);
+    this.setKeys(keys);
+  }
+
+  /** The key bindings changed (or are first known): key chips, titles and labels name the new keys. */
+  setKeys(keys: KeyBinds): void {
+    this.keys = keys;
+    for (const [s, { b, key, slot }] of this.skillBtns) {
+      key.textContent = keys[slot].length ? keysName(keys, slot).split(' / ')[0] : '';
+      b.title = `${SKILL_INFO[s].name} (${keysName(keys, slot)}) — ${SKILL_INFO[s].desc}`;
+    }
+    label(this.stepBack, `Step back one tick (${keysName(keys, 'stepBack')})`);
+    label(this.stepFwd, `Step forward one tick (${keysName(keys, 'stepFwd')})`);
+    // the next update() rewrites the labels that depend on state
+    this.last = '';
+  }
+
+  /** A line of level-wide news across the screen for `seconds` (the quota met). */
+  banner(text: string, seconds = 2.6): void {
+    this.bannerEl.textContent = text;
+    this.bannerEl.classList.remove('show');
+    void this.bannerEl.offsetWidth;
+    this.bannerEl.classList.add('show');
+    this.bannerTimer = seconds;
   }
 
   /** A line in the hint box for `seconds`; a `lesson` (an onboarding moment) is drawn a little louder. */
@@ -235,6 +278,10 @@ export class Hud {
   }
 
   tick(dt: number): void {
+    if (this.bannerTimer > 0) {
+      this.bannerTimer -= dt;
+      if (this.bannerTimer <= 0) this.bannerEl.classList.remove('show');
+    }
     if (this.hintTimer > 0) {
       this.hintTimer -= dt;
       if (this.hintTimer <= 0) this.hintEl.classList.remove('show');
@@ -274,11 +321,14 @@ export class Hud {
     (this.bar.children[2] as HTMLElement).style.left = `${(s.target / s.total) * 100}%`;
     this.spindleEl.style.display = s.spindle === null ? 'none' : '';
     this.spindleEl.classList.toggle('got', !!s.spindle);
-    for (const [k, { b, n }] of this.skillBtns) {
+    const keys = (a: KeyAction) => keysName(this.keys, a);
+    for (const [k, { b, n, slot }] of this.skillBtns) {
       const c = s.skills[k];
       n.textContent = String(c);
       b.classList.toggle('armed', s.armed === k);
       b.classList.toggle('empty', c <= 0);
+      b.setAttribute('aria-label', `${SKILL_INFO[k].name}, ${c} left, key ${keys(slot)}`);
+      b.setAttribute('aria-pressed', String(s.armed === k));
     }
     this.armedEl.classList.toggle('show', s.armed !== null);
     if (s.armed) {
@@ -293,16 +343,20 @@ export class Hud {
       if (old) old.replaceWith(c); else b.append(c);
     };
     swap(this.pauseBtn, s.paused ? 'play' : 'pause');
+    label(this.pauseBtn, `${s.paused ? 'Resume' : 'Pause'} (${keys('pause')})`);
     swap(this.speedBtn, s.speed >= 4 ? 'faster' : 'fast');
-    this.speedBtn.classList.toggle('on', s.speed > 1);
-    this.speedBtn.dataset.speed = `${s.speed}×`;
+    this.speedBtn.classList.toggle('on', s.speed !== 1);
+    this.speedBtn.dataset.speed = speedName(s.speed);
+    label(this.speedBtn, `Speed ${speedName(s.speed)} (${keys('speed')})`);
     swap(this.eyeBtn, s.foresight ? 'eye' : 'eye_off');
     this.eyeBtn.classList.toggle('on', s.foresight);
+    label(this.eyeBtn, `Skuld's Foresight ${s.foresight ? 'on' : 'off'} (${keys('foresight')})`);
+    this.eyeBtn.setAttribute('aria-pressed', String(s.foresight));
     this.projectBtn.classList.toggle('off', !s.foresight);
     this.pauseBtn.classList.toggle('on', s.paused);
     this.rewindBtn.classList.toggle('on', s.rewinding);
-    const rewindTitle = s.rewindToggle ? 'Rewind (R): press to start, again to stop' : 'Hold to rewind (R)';
-    if (this.rewindBtn.title !== rewindTitle) this.rewindBtn.title = rewindTitle;
+    label(this.rewindBtn, s.rewindToggle ? `Rewind (${keys('rewind')}): press to start, again to stop` : `Hold to rewind (${keys('rewind')})`);
+    this.rewindBtn.setAttribute('aria-pressed', String(s.rewinding));
     (this.rewindBtn.querySelector('.rsec') as HTMLElement).textContent = `${Math.floor(s.rewindSec)}s`;
     if (s.boss) {
       this.bossWrap.classList.add('show');
@@ -331,4 +385,10 @@ export class Hud {
   dispose(): void {
     this.root.remove();
   }
+}
+
+/** A button's tooltip and its accessible name, kept the same. */
+function label(b: HTMLButtonElement, text: string): void {
+  if (b.title !== text) b.title = text;
+  if (b.getAttribute('aria-label') !== text) b.setAttribute('aria-label', text);
 }
