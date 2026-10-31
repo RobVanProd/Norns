@@ -42,6 +42,48 @@ describe('bosses', () => {
     });
   }
 
+  it('stones light in the level’s fixed order, and every attack strikes its fixed aim in turn', () => {
+    const def: LevelDef = { ...arena('jotunn'), boss: { ...arena('jotunn').boss!, hp: 9, stones: [1, 0, 1], aim: { icicles: [100, 300], slam: [150] } } };
+    const sim = Sim.create(def);
+    const lit: number[] = [], strikes: string[] = [];
+    for (let i = 0; i < 30 * 60 && strikes.length < 6; i++) {
+      sim.step();
+      for (const e of sim.events) {
+        if (e.type === 'seidr_on') lit.push(e.id!);
+        if (e.type === 'icicle_warn') strikes.push(`icicles@${(sim.d.projectiles.reduce((a, p) => a + p.tx, 0) / sim.d.projectiles.length).toFixed(0)}`);
+        if (e.type === 'hazard_slam' || e.type === 'hazard_breath') strikes.push(`${e.s}@${Math.round(e.type === 'hazard_slam' ? e.x : 0)}`);
+      }
+    }
+    expect(lit.slice(0, 3)).toEqual([1, 0, 1]);
+    // icicles centre on 100, then 300; the breath (no aim) on the arena's middle; the slam on 150
+    expect(strikes.slice(0, 5)).toEqual(['icicles@100', 'breath@0', 'slam@150', 'icicles@300', 'breath@0']);
+    expect(sim.d.rng, 'no boss draws on the RNG').toBe(def.seed >>> 0);
+  });
+
+  it('a fallen Jötunn’s last quake shakes loose a Warden still holding the crowd back', () => {
+    for (const kind of ['jotunn', 'wyrm'] as const) {
+      const base = arena(kind);
+      const def: LevelDef = {
+        ...base,
+        skills: { warden: 1 },
+        entities: [{ type: 'entrance', x: 40, y: 150 }, { type: 'exit', x: 300, y: 199 }, { type: 'seidr', x: 20, y: 199 }],
+        boss: { ...base.boss!, hp: 1, delay: 3000, aim: { slam: [100] } },
+      };
+      const sim = Sim.create(def);
+      let fell = -1;
+      for (let i = 0; i < 600 && fell < 0; i++) {
+        if (sim.d.wyrds[0]?.st === 'walk' && sim.d.wyrds[0].x >= 80) sim.assign(0, 'warden');
+        sim.step();
+        if (sim.events.some((e) => e.type === 'boss_defeat')) fell = sim.d.tick;
+      }
+      // the second Wyrdling turns at the Warden and strikes the stone behind it
+      expect(fell, kind).toBeGreaterThan(0);
+      expect(sim.d.wyrds[0].st).toBe('warden');
+      for (let i = 0; i < 40; i++) sim.step();
+      expect(sim.d.wyrds[0].st === 'warden', kind).toBe(kind === 'wyrm');
+    }
+  });
+
   it('exit is locked while the boss lives and opens when it falls', () => {
     const sim = Sim.create(arena('wyrm'));
     expect(sim.exitOpen).toBe(false);

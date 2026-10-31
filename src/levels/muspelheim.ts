@@ -169,39 +169,59 @@ export const U4: LevelDef = {
 
 export const U5: LevelDef = {
   id: 'u5', name: "Surtr's Herald", realm: 'muspelheim', music: 'boss',
-  intro: "Surtr's Herald bars the last gate with a sword of flame. High ground burns in the sweep; low ground drowns in magma.",
+  intro: "Surtr's Herald bars the last gate with a lake of fire and a sword of flame.",
+  idea: 'Ride the heat over the magma, and keep the crowd by the gate.',
   hints: [
-    'The flaming sword sweeps one side of the arena. Low ground is safe from it…',
-    '…but when the magma rises, only the high ground survives. Read the warnings.',
-    'Meteors leave craters — and later, boulders.',
+    'The stones light in a fixed order. NEXT marks the one after the glowing stone.',
+    'Gliders ride the Herald’s heat over the magma lake to the far stone. Walkers just fall in.',
+    'The sword sweeps the floor it marks. A Warden keeps the crowd by the gate, out of the lake and the first sweep; the second comes for the gate.',
   ],
   width: 640, height: 320, seed: 75,
   wyrdlings: 20, quota: 10, target: 13, rate: 30,
-  skills: { climber: 3, leaper: 2, weaver: 3, warden: 2, glider: 2, blast: 2 },
+  skills: { climber: 2, leaper: 2, weaver: 2, warden: 2, glider: 2, blast: 2 },
   ambient: [0.7, 0.52, 0.48],
   terrain: [
     { op: 'rect', mat: 'Rock', x: 0, y: 258, w: 520, h: 62, rough: 2 },
-    { op: 'rect', mat: 'Earth', x: 0, y: 256, w: 520, h: 4 },
-    { op: 'rect', mat: 'Rock', x: 278, y: 238, w: 54, h: 20, rough: 0.5 },
-    { op: 'rect', mat: 'Air', x: 396, y: 256, w: 48, h: 20 },
+    { op: 'rect', mat: 'Earth', x: 310, y: 256, w: 210, h: 4 },
+    // the far bank: its stone is reached only on the Herald's heat
+    { op: 'rect', mat: 'Rock', x: 0, y: 200, w: 240, h: 60, rough: 1 },
+    // (a wall on the bank turns a Glider back to the heat before it wanders off)
+    { op: 'rect', mat: 'Rock', x: 0, y: 150, w: 190, h: 52, rough: 2 },
+    // the magma lake
+    { op: 'rect', mat: 'Air', x: 240, y: 256, w: 70, h: 44 },
+    // a buttress by the Herald: its stone needs a Climber
+    { op: 'rect', mat: 'Rock', x: 494, y: 226, w: 28, h: 32, rough: 0.5 },
     { op: 'rect', mat: 'Iron', x: 520, y: 0, w: 16, h: 262 },
     { op: 'ground', mat: 'Rock', pts: [[536, 310], [600, 306], [640, 310]], rough: 3 },
     { op: 'ceiling', mat: 'Rock', pts: [[0, 40], [160, 30], [320, 50], [480, 34], [640, 46]], rough: 6, grain: 16 },
   ],
   entities: [
-    { type: 'entrance', x: 80, y: 196 },
-    { type: 'exit', x: 26, y: 255 },
-    { type: 'seidr', x: 150, y: 255 },
-    { type: 'seidr', x: 305, y: 237 },
-    { type: 'seidr', x: 420, y: 275 },
-    { type: 'decor', sprite: 'brazier', x: 60, y: 255 },
-    { type: 'decor', sprite: 'brazier', x: 230, y: 255 },
-    { type: 'decor', sprite: 'brazier', x: 480, y: 255 },
-    { type: 'decor', sprite: 'banner', x: 200, y: 52 },
+    { type: 'entrance', x: 470, y: 196, dir: -1 },
+    { type: 'exit', x: 466, y: 255 },
+    { type: 'lava', x: 240, y: 288, w: 70, h: 32 },
+    { type: 'vent', x: 240, y: 296, w: 70, h: 104, boss: true },
+    { type: 'seidr', x: 432, y: 255 },
+    { type: 'seidr', x: 215, y: 199 },
+    { type: 'seidr', x: 507, y: 225 },
+    { type: 'seidr', x: 410, y: 255 },
+    { type: 'decor', sprite: 'brazier', x: 330, y: 255 },
+    { type: 'decor', sprite: 'brazier', x: 200, y: 199 },
+    { type: 'decor', sprite: 'banner', x: 300, y: 52 },
   ],
-  boss: { kind: 'herald', x: 590, y: 310, hp: 5, delay: 160, arena: { x0: 12, x1: 512, floorY: 255 } },
+  boss: {
+    kind: 'herald', x: 590, y: 310, hp: 5, delay: 160, arena: { x0: 12, x1: 512, floorY: 255 },
+    // a floor stone (free once), the far bank, the buttress, another floor stone, the buttress again
+    stones: [0, 1, 2, 3, 2],
+    // the first sweep takes the floor by the lake; the second comes for the gate
+    aim: { meteors: [200, 350], sweep: [250, 450] },
+  },
   solution: [
-    { nth: 0, skill: 'climber', purpose: ['quota', 'target', 'boss'] },
+    // the leader walks off the edge and rides the heat to the far bank
+    { nth: 0, skill: 'glider', purpose: ['boss'] },
+    // the next holds the crowd by the gate, clear of the lake and the first sweep
+    { nth: 1, x: 396, dir: -1, skill: 'warden', purpose: ['quota', 'target'] },
+    // one of the crowd climbs the buttress whenever its stone is lit
+    { nth: 2, skill: 'climber', purpose: ['boss'] },
   ],
 };
 

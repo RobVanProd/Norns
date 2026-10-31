@@ -156,41 +156,53 @@ export const M4: LevelDef = {
 export const M5: LevelDef = {
   id: 'm5', name: 'The Gnawing Wyrm', realm: 'midgard', music: 'boss',
   intro: 'A wyrm gnaws at the roots of the world. Lead Wyrdlings onto the glowing Seiðr stones — each one wounds it.',
+  idea: 'Weave over the hole the Wyrm gnaws, and climb to the stone on its perch.',
   hints: [
-    'Only the GLOWING Seiðr stone strikes. When it fires, another lights up elsewhere.',
-    'Red markers show where the Wyrm will strike. Foresight shows who it will hit.',
-    'The Root Gate opens when the Wyrm falls.',
+    'The stones light in a fixed order. NEXT marks the one after the glowing stone.',
+    'The Wyrm gnaws through the root crust first: weave a bridge over the hole before the crowd gets there.',
+    'The stone on the Wyrm’s perch needs a Climber. The Root Gate beside it opens when the Wyrm falls.',
   ],
   width: 640, height: 300, seed: 55,
   wyrdlings: 20, quota: 10, target: 12, rate: 30,
-  skills: { weaver: 4, warden: 3, digger: 2, climber: 2, glider: 2 },
+  skills: { weaver: 3, climber: 2, warden: 2, digger: 2 },
   ambient: [0.75, 0.7, 0.8],
   terrain: [
-    { op: 'rect', mat: 'Earth', x: 0, y: 240, w: 420, h: 60, rough: 1 },
-    { op: 'rect', mat: 'Rock', x: 0, y: 264, w: 420, h: 36, rough: 3 },
-    { op: 'poly', mat: 'Rock', pts: [[278, 241], [300, 226], [340, 226], [362, 241]] },
-    { op: 'rect', mat: 'Earth', x: 300, y: 224, w: 40, h: 4 },
-    { op: 'rect', mat: 'Earth', x: 450, y: 216, w: 84, h: 84, rough: 1 },
-    { op: 'rect', mat: 'Rock', x: 450, y: 244, w: 84, h: 56, rough: 3 },
+    { op: 'rect', mat: 'Earth', x: 0, y: 240, w: 520, h: 60, rough: 1 },
+    { op: 'rect', mat: 'Rock', x: 0, y: 264, w: 520, h: 36, rough: 3 },
+    // the Wyrm's shaft under a thin root crust: its burrow breaks it open
+    { op: 'rect', mat: 'Air', x: 364, y: 244, w: 24, h: 56 },
+    { op: 'rect', mat: 'Root', x: 360, y: 240, w: 32, h: 4 },
+    // a rune-iron lip: whoever crosses stays in the pen by the Root Gate
+    { op: 'rect', mat: 'Iron', x: 388, y: 226, w: 12, h: 16 },
+    // the Wyrm's perch: a stone on top that only a Climber reaches
+    { op: 'rect', mat: 'Rock', x: 474, y: 208, w: 48, h: 34, rough: 1 },
     { op: 'rect', mat: 'Iron', x: 520, y: 150, w: 14, h: 92 },
     { op: 'ground', mat: 'Rock', pts: [[534, 236], [580, 228], [640, 232]], rough: 4 },
     { op: 'ceiling', mat: 'Rock', pts: [[0, 40], [120, 30], [260, 46], [400, 34], [520, 60], [640, 40]], rough: 6, grain: 16 },
     { op: 'rect', mat: 'Root', x: 0, y: 30, w: 640, h: 16, rough: 5, only: ['Rock'] },
   ],
   entities: [
-    { type: 'entrance', x: 70, y: 168 },
-    { type: 'exit', x: 30, y: 239 },
-    { type: 'seidr', x: 200, y: 239 },
-    { type: 'seidr', x: 320, y: 223 },
-    { type: 'seidr', x: 486, y: 215 },
-    { type: 'decor', sprite: 'torch', x: 110, y: 230 },
-    { type: 'decor', sprite: 'torch', x: 400, y: 230 },
+    { type: 'entrance', x: 110, y: 168 },
+    { type: 'exit', x: 446, y: 239 },
+    { type: 'seidr', x: 220, y: 239 },
+    { type: 'seidr', x: 420, y: 239 },
+    { type: 'seidr', x: 500, y: 207 },
+    { type: 'decor', sprite: 'torch', x: 60, y: 230 },
+    { type: 'decor', sprite: 'torch', x: 300, y: 230 },
     { type: 'decor', sprite: 'banner', x: 230, y: 50 },
-    { type: 'decor', sprite: 'runestone', x: 508, y: 215 },
   ],
-  boss: { kind: 'wyrm', x: 572, y: 132, hp: 6, delay: 150, arena: { x0: 12, x1: 512, floorY: 239 } },
+  boss: {
+    kind: 'wyrm', x: 572, y: 132, hp: 5, delay: 150, arena: { x0: 12, x1: 512, floorY: 239 },
+    // the floor stone (free once), then the pen stone across the hole and the perch stone, twice
+    stones: [0, 1, 2, 1, 2],
+    // its first burrow breaks the root crust before anyone gets there; the tail lashes the pen and the bridge
+    aim: { burrow: [376, 200], venom: [270, 440], lash: [380] },
+  },
   solution: [
-    { nth: 0, x: 416, dir: 1, skill: 'weaver', purpose: ['quota', 'target', 'boss'] },
+    // the leader bridges the hole from its near edge; the crowd waits behind it, then crosses into the pen
+    { nth: 0, x: 358, dir: 1, skill: 'weaver', purpose: ['quota', 'target', 'boss'] },
+    // whoever follows it into the pen climbs the perch whenever its stone is lit
+    { nth: 1, skill: 'climber', purpose: ['boss'] },
   ],
 };
 
