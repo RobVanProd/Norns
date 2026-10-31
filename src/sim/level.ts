@@ -70,6 +70,10 @@ export interface BossDef {
   arena: { x0: number; x1: number; floorY: number };
 }
 
+/** What a solution step is for. 'target' means the solution's save count (`solutionSaves ?? target`);
+ *  'finish' marks a step needed only so the run ends by itself (nobody left wandering). */
+export type StepPurpose = 'quota' | 'target' | 'spindle' | 'boss' | 'finish';
+
 /** A scripted assignment used by the test-suite to prove a level is solvable. */
 export interface SolutionStep {
   skill: SkillId;
@@ -86,6 +90,9 @@ export interface SolutionStep {
   maxY?: number;
   /** require state */
   state?: string;
+  /** what would be lost without this step: the level tests rerun the solution with exactly this
+   *  step dropped and expect at least one of these to fail */
+  purpose?: StepPurpose[];
 }
 
 export interface LevelDef {

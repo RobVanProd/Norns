@@ -36,7 +36,7 @@ export const M1: LevelDef = {
     { type: 'decor', sprite: 'torch', x: 40, y: 160 },
   ],
   solution: [
-    { nth: 0, x: 196, skill: 'digger' },
+    { nth: 0, x: 196, skill: 'digger', purpose: ['quota', 'target', 'spindle'] },
   ],
 };
 
@@ -70,9 +70,9 @@ export const M2: LevelDef = {
     { type: 'decor', sprite: 'banner', x: 470, y: 60 },
   ],
   solution: [
-    { nth: 0, x: 196, skill: 'weaver' },
-    { nth: 0, x: 270, dir: 1, skill: 'weaver' },
-    { nth: 0, x: 352, dir: 1, skill: 'weaver' },
+    { nth: 0, x: 196, skill: 'weaver', purpose: ['quota', 'target', 'spindle'] },
+    { nth: 0, x: 270, dir: 1, skill: 'weaver', purpose: ['spindle'] },
+    { nth: 0, x: 352, dir: 1, skill: 'weaver', purpose: ['quota', 'target'] },
   ],
 };
 
@@ -102,15 +102,16 @@ export const M3: LevelDef = {
     { type: 'entrance', x: 200, y: 100, dir: -1 },
     { type: 'exit', x: 440, y: 180 },
     { type: 'water', x: 0, y: 214, w: 62, h: 56 },
-    { type: 'spindle', x: 70, y: 180 },
+    // behind the rock, so only the Basher's tunnel reaches it (by the cliff, a null run took it)
+    { type: 'spindle', x: 390, y: 180 },
     { type: 'decor', sprite: 'torch', x: 280, y: 150 },
     { type: 'decor', sprite: 'torch', x: 120, y: 150 },
     { type: 'decor', sprite: 'torch', x: 420, y: 150 },
     { type: 'decor', sprite: 'banner', x: 380, y: 60 },
   ],
   solution: [
-    { nth: 0, x: 66, dir: -1, skill: 'warden' },
-    { nth: 1, x: 294, dir: 1, skill: 'basher' },
+    { nth: 0, x: 66, dir: -1, skill: 'warden', purpose: ['quota', 'target', 'spindle'] },
+    { nth: 1, x: 294, dir: 1, skill: 'basher', purpose: ['quota', 'target', 'spindle'] },
   ],
 };
 
@@ -146,8 +147,8 @@ export const M4: LevelDef = {
     { type: 'decor', sprite: 'banner', x: 300, y: 120 },
   ],
   solution: [
-    { nth: 0, skill: 'climber' },
-    { nth: 0, skill: 'glider' },
+    { nth: 0, skill: 'climber', purpose: ['quota', 'target', 'spindle'] },
+    { nth: 0, skill: 'glider', purpose: ['target', 'spindle'] },
   ],
 };
 
@@ -188,7 +189,7 @@ export const M5: LevelDef = {
   ],
   boss: { kind: 'wyrm', x: 572, y: 132, hp: 6, delay: 150, arena: { x0: 12, x1: 512, floorY: 239 } },
   solution: [
-    { nth: 0, x: 416, dir: 1, skill: 'weaver' },
+    { nth: 0, x: 416, dir: 1, skill: 'weaver', purpose: ['quota', 'target', 'boss'] },
   ],
 };
 

@@ -36,8 +36,8 @@ export const N1: LevelDef = {
     { type: 'decor', sprite: 'runestone', x: 280, y: 220 },
   ],
   solution: [
-    { nth: 0, x: 130, dir: 1, skill: 'leaper' },
-    { nth: 0, x: 200, dir: 1, minY: 190, maxY: 200, skill: 'leaper' },
+    { nth: 0, x: 130, dir: 1, skill: 'leaper', purpose: ['quota', 'target', 'spindle'] },
+    { nth: 0, x: 200, dir: 1, minY: 190, maxY: 200, skill: 'leaper', purpose: ['spindle'] },
   ],
 };
 
@@ -75,7 +75,7 @@ export const N2: LevelDef = {
     { type: 'light', x: 300, y: 200, r: 90, color: '#6fb8ff', flicker: 0.1 },
   ],
   solution: [
-    { nth: 0, x: 208, dir: 1, skill: 'miner' },
+    { nth: 0, x: 208, dir: 1, skill: 'miner', purpose: ['quota', 'target', 'spindle'] },
   ],
 };
 export const N3: LevelDef = {
@@ -111,8 +111,8 @@ export const N3: LevelDef = {
     { type: 'decor', sprite: 'crystal', x: 400, y: 227 },
   ],
   solution: [
-    { nth: 0, x: 101, dir: -1, skill: 'warden' },
-    { nth: 1, x: 246, dir: 1, skill: 'leaper' },
+    { nth: 0, x: 101, dir: -1, skill: 'warden', purpose: ['quota', 'target', 'spindle'] },
+    { nth: 1, x: 246, dir: 1, skill: 'leaper', purpose: ['spindle'] },
   ],
 };
 
@@ -157,9 +157,9 @@ export const N4: LevelDef = {
     { type: 'light', x: 540, y: 285, r: 80, color: '#7cc4ff', flicker: 0.1 },
   ],
   solution: [
-    { nth: 0, x: 168, dir: 1, skill: 'leaper' },
-    { nth: 0, x: 204, minY: 203, maxY: 212, skill: 'warden' },
-    { nth: 1, x: 430, dir: 1, skill: 'miner' },
+    { nth: 0, x: 168, dir: 1, skill: 'leaper', purpose: ['quota', 'target', 'spindle'] },
+    { nth: 0, x: 204, minY: 203, maxY: 212, skill: 'warden', purpose: ['quota', 'target', 'spindle'] },
+    { nth: 1, x: 430, dir: 1, skill: 'miner', purpose: ['quota', 'target', 'spindle'] },
   ],
 };
 
@@ -196,12 +196,10 @@ export const N5: LevelDef = {
   ],
   boss: { kind: 'jotunn', x: 566, y: 300, hp: 6, delay: 160, arena: { x0: 12, x1: 512, floorY: 257 } },
   solution: [
-    { nth: 0, skill: 'climber' },
-    { nth: 0, skill: 'glider' },
-    { nth: 1, skill: 'climber' },
-    { nth: 1, skill: 'glider' },
-    // a slam shockwave tosses one Wyrdling into the gully behind the ledge: leap it back out
-    { nth: 10, t: 1000, x: 268, dir: -1, skill: 'leaper' },
+    { nth: 0, skill: 'climber', purpose: ['quota', 'target', 'boss'] },
+    // a slam shockwave tosses one Wyrdling into the gully behind the ledge: leap it back out, or it
+    // wanders there forever and the level never ends by itself
+    { nth: 10, t: 1000, x: 268, dir: -1, skill: 'leaper', purpose: ['finish'] },
   ],
 };
 
