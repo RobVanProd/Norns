@@ -30,7 +30,7 @@ export interface Weave {
 }
 
 // Text, music, lighting and decor never reach the simulation: editing them must not invalidate Weaves.
-const PRESENTATION_KEYS = new Set(['id', 'name', 'realm', 'intro', 'hints', 'music', 'ambient', 'solution', 'solutionSaves']);
+const PRESENTATION_KEYS = new Set(['id', 'name', 'realm', 'intro', 'idea', 'hints', 'music', 'ambient', 'solution', 'solutionSaves']);
 const PRESENTATION_ENTITIES = new Set(['decor', 'light']);
 
 /** JSON with sorted keys (undefined members dropped, like JSON.stringify), so key order never matters. */

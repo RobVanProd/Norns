@@ -1,4 +1,5 @@
-// In-level HUD: counters, quota bar, boss health, skill bar, time controls, hints, fate summary.
+// In-level HUD: counters, quota bar, boss health, skill bar, time controls, hints, fate summary, the
+// stalemate notice and the paused verdict.
 import { SKILLS, SKILL_INFO, type SkillId } from '../sim/constants';
 import { el, pixelCanvas } from './dom';
 
@@ -15,6 +16,10 @@ export interface HudCallbacks {
   foresight(): void;
   /** held: Foresight follows the hovered Wyrdling's calling further ahead */
   project(on: boolean): void;
+  /** Cut the Threads: end the level now */
+  cut(): void;
+  /** the stalemate notice's ×: keep playing without it */
+  closeNotice(): void;
   restart(): void;
   menu(): void;
 }
@@ -39,6 +44,16 @@ export interface HudState {
   boss: { hp: number; max: number; name: string } | null;
   doomed: number;
   horizon: number;
+  /** a stalemate is proven: offer Rewind or Cut the Threads */
+  stalled: boolean;
+  verdict: VerdictView | null;
+}
+
+/** The paused verdict: what it is about, then the outcome ([words, tone]) or, while weighing, nothing. */
+export interface VerdictView {
+  lead: string;
+  busy: boolean;
+  parts: [string, 'good' | 'bad' | ''][];
 }
 
 export class Hud {
@@ -59,6 +74,8 @@ export class Hud {
   private bossFill: HTMLDivElement;
   private bossName: HTMLDivElement;
   private fateEl: HTMLDivElement;
+  private noticeEl: HTMLDivElement;
+  private verdictEl: HTMLDivElement;
   private hintEl: HTMLDivElement;
   private hintTimer = 0;
   private icons: Record<string, HTMLCanvasElement>;
@@ -134,10 +151,30 @@ export class Hud {
     for (const t of ['pointerup', 'pointercancel', 'pointerleave'] as const) this.projectBtn.addEventListener(t, pOff);
     this.projectBtn.addEventListener('contextmenu', (e) => e.preventDefault());
     this.hintEl = el('div', { class: 'hint' });
+    // a proven stalemate: honest about what is known (nothing changes by itself), never "lost"
+    const nRewind = el('button', { class: 'btn small', text: 'Rewind' });
+    nRewind.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      cb.rewind(true);
+      // in hold mode the rewind runs until this press ends, wherever the pointer is by then (the
+      // notice hides as soon as the run changes)
+      const up = () => { cb.rewind(false); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+    });
+    const nCut = el('button', { class: 'btn small', text: 'Cut the Threads' });
+    nCut.addEventListener('click', (e) => { e.stopPropagation(); cb.cut(); });
+    const nClose = el('button', { class: 'nclose', title: 'Keep playing', 'aria-label': 'Close', text: '×' });
+    nClose.addEventListener('click', (e) => { e.stopPropagation(); cb.closeNotice(); });
+    this.noticeEl = el('div', { class: 'notice panel', role: 'status' },
+      el('div', { class: 'ntext', text: 'Nothing more will happen unless you act.' }),
+      el('div', { class: 'nrow' }, nRewind, nCut), nClose);
+    this.verdictEl = el('div', { class: 'verdict panel', role: 'status' });
     const bottom = el('div', { class: 'hud-bottom' }, bar, this.rewindBtn, this.projectBtn);
-    this.root = el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, bottom);
+    this.root = el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, this.noticeEl, this.verdictEl, bottom);
     // HUD panels swallow pointer events so taps on buttons don't reach the world
-    for (const p of [top, bottom, this.bossWrap]) p.addEventListener('pointerdown', (e) => e.stopPropagation());
+    for (const p of [top, bottom, this.bossWrap, this.noticeEl]) p.addEventListener('pointerdown', (e) => e.stopPropagation());
     parent.append(this.root);
   }
 
@@ -217,7 +254,18 @@ export class Hud {
       this.fateEl.textContent = `☠ ${s.doomed} doomed within ${s.horizon}s`;
       this.fateEl.classList.add('show');
     } else this.fateEl.classList.remove('show');
+    this.noticeEl.classList.toggle('show', s.stalled);
+    const v = s.verdict;
+    this.verdictEl.classList.toggle('show', v !== null);
+    if (v) {
+      const lead = el('span', { class: 'vlead', text: v.lead });
+      const parts: (HTMLElement | string)[] = [lead, ' '];
+      if (v.busy) parts.push(el('span', { class: 'vbusy', text: 'weighing fate…' }));
+      else v.parts.forEach(([t, tone], i) => parts.push(i ? ' · ' : '', el('span', { class: tone && `v${tone}`, text: t })));
+      this.verdictEl.replaceChildren(...parts);
+    }
     this.root.classList.toggle('paused', s.paused);
+    this.root.classList.toggle('verdict-on', v !== null);
     this.root.classList.toggle('boss', !!s.boss);
   }
 
