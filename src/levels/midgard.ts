@@ -6,9 +6,8 @@ export const M1: LevelDef = {
   id: 'm1', name: 'First Threads', realm: 'midgard', music: 'midgard',
   intro: 'The Wyrdlings wander blind. Grant one the calling of the Digger and open a way below.',
   hints: [
+    // Foresight's skulls and Rewind are taught when they first matter (see Lesson in play.ts)
     'Pick DIGGER from the bar, then tap a Wyrdling on the grassy ledge.',
-    'Dotted threads show each fate. A red skull means doom — change it.',
-    'Hold REWIND (or R) to unspool time. Mistakes cost seconds, not restarts.',
   ],
   width: 480, height: 270, seed: 11,
   wyrdlings: 10, quota: 6, target: 10, rate: 45,
@@ -46,7 +45,6 @@ export const M2: LevelDef = {
   hints: [
     'WEAVERS lay 12 rising planks. Start the gorge bridge at its very edge.',
     'The rock step needs a second bridge, begun a few steps back from the wall. Too close or too far and it fails.',
-    'Watch the gold branch thread before you commit: it shows the new fate.',
   ],
   width: 560, height: 280, seed: 22,
   wyrdlings: 12, quota: 9, target: 12, rate: 40,

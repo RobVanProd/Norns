@@ -30,6 +30,24 @@ export interface ViewInput {
   projecting: boolean;
   /** the pointer is a finger (for the look-ahead hint) */
   touch: boolean;
+  /** the first-doom lesson: point at this skull (where Wyrdling `id` is foreseen to die) */
+  pointer?: { x: number; y: number; id: number } | null;
+  /** Skuld's Vision: where (and when, and which) callings happen */
+  marks?: MarkView[];
+}
+
+/** A staged-Vision marker on the terrain: where a calling happens, a countdown to when, and maybe which. */
+export interface MarkView {
+  x: number;
+  y: number;
+  /** the Wyrdling it goes to (ringed once it is out) */
+  id: number;
+  /** the calling's name (tier 2 on), or null */
+  label: string | null;
+  /** whole seconds left before it happens; null once it has */
+  secs: number | null;
+  /** what the calling will leave in the terrain (tier 3 on) */
+  ghost: Ghost | null;
 }
 
 interface Popup { text: string; x: number; y: number; life: number; r: number; g: number; b: number }
@@ -113,6 +131,8 @@ export class GameView {
   private crusherTops: number[] = [];
   shake = 0;
   flash: [number, number, number, number] = [1, 1, 1, 0];
+  /** the last frame drew a sacrifice label ("1 lost · 3 saved later"), for the lesson that explains it */
+  sacrifice = false;
   private atmoT = 0;
 
   constructor(p: Pipeline, art: ArtBundle, sim: Sim) {
@@ -359,7 +379,10 @@ export class GameView {
     this.drawBoss(sim, time);
     this.drawWyrds(sim, inp);
     this.drawHazards(sim, time);
+    this.sacrifice = false;
     if (inp.showForesight && !inp.rewinding) this.drawForesight(sim, inp);
+    if (inp.pointer) this.drawPointer(sim, inp.pointer, inp.time);
+    if (inp.marks) for (const m of inp.marks) this.drawMark(sim, m, inp.time);
     this.drawPopups(inp.dt);
     this.atmosphere(sim, inp.dt);
 
@@ -852,17 +875,78 @@ export class GameView {
       rows.push([{ s, c }]);
     }
     if (branch) {
-      if (baseline) rows.push(deltaWords(compareFates(baseline, branch)));
+      if (baseline) {
+        const d = compareFates(baseline, branch);
+        if (isSacrifice(d)) this.sacrifice = true;
+        rows.push(deltaWords(d));
+      }
       if (branch.skill && sim.d.skills[branch.skill] === 1) rows.push([{ s: `uses your last ${SKILL_INFO[branch.skill].name}`, c: COST }]);
       const looking = inp.projecting && !branch.shadow;
       if (looking || !inp.projecting) rows.push([{ s: looking ? 'looking further ahead...' : inp.touch ? 'hold the 15s eye button' : 'hold Q to look 15s ahead', c: DIM }]);
     }
-    // one shared centre, pulled in from the view's edges so no row is cut off
-    const v = this.p.view;
+    // one shared centre, pulled in from the screen's edges so no row is cut off (the view can be wider
+    // than the screen: it is cropped to cover it)
+    const left = this.p.screenToWorld(0, 0, 1).x;
+    const right = left + this.p.canvas.width / this.p.scale;
     let half = 0;
     for (const r of rows) half = Math.max(half, this.rowWidth(r) / 2);
-    const x = Math.max(v.x + half + 2, Math.min(v.x + v.z - half - 2, w.x));
+    const x = Math.max(left + half + 2, Math.min(right - half - 2, w.x));
     rows.forEach((r, i) => this.textRow(r, x, w.y - 38 - i * 10));
+  }
+
+  /** A solid arrow pointing down at (x, y), its tip at y. */
+  private arrowDown(x: number, y: number, c: Rgb, a = 1): void {
+    const O = this.over, W = this.atlas.white;
+    for (const [dy, w] of [[-10, 3], [-9, 3], [-8, 3], [-7, 3], [-6, 3], [-5, 9], [-4, 7], [-3, 5], [-2, 3], [-1, 1]] as const) {
+      O.rect(W, x - (w >> 1) + 1, y + dy + 1, w, 1, 0.05, 0.03, 0.08, a * 0.8);
+      O.rect(W, x - (w >> 1), y + dy, w, 1, c[0], c[1], c[2], a);
+    }
+  }
+
+  /** The first-doom lesson: a bobbing arrow over the skull, and the doomed Wyrdling ringed in red. A skull
+   *  off screen (or under the HUD) gets its arrow at the nearest edge instead: the camera stays put. */
+  private drawPointer(sim: Sim, p: { x: number; y: number; id: number }, time: number): void {
+    const bob = Math.round(Math.sin(time * 6) * 2);
+    const pulse = 0.75 + 0.25 * Math.sin(time * 8);
+    const cv = this.p.canvas, k = cv.width / Math.max(1, cv.clientWidth) / this.p.scale; // world px per CSS px
+    const tl = this.p.screenToWorld(0, 0, 1);
+    const x0 = tl.x + 12 * k, x1 = tl.x + cv.width / this.p.scale - 12 * k;
+    const y0 = tl.y + 90 * k, y1 = tl.y + cv.height / this.p.scale - 100 * k; // clear of the HUD's top and bottom bars
+    const x = Math.max(x0, Math.min(x1, p.x)), y = Math.max(y0, Math.min(y1, p.y - 5));
+    if (x === p.x && y === p.y - 5) {
+      this.over.push(this.f('target', Math.floor(time * 10)), p.x, p.y - 5, { r: 1, g: 0.3, b: 0.25, a: pulse, sx: 1.6, sy: 1.6, smooth: true });
+      this.arrowDown(p.x, p.y - 14 + bob, [1, 0.42, 0.36]);
+    } else this.arrowDown(x, y + bob, [1, 0.42, 0.36]);
+    const w = sim.d.wyrds[p.id];
+    if (w && isAlive(w)) this.over.push(this.f('cursor.ring', Math.floor(time * 10)), w.x, w.y - 6, { r: 1, g: 0.35, b: 0.3, a: pulse });
+  }
+
+  /** A dashed ring of radius r turning slowly around (x, y). */
+  private ring(x: number, y: number, r: number, c: Rgb, a: number, time: number): void {
+    const W = this.atlas.white, n = Math.round(r * 6);
+    for (let i = 0; i < n; i++) {
+      if (((i + Math.floor(time * 8)) & 3) === 3) continue;
+      const t = (i / n) * Math.PI * 2;
+      const px = Math.round(x + Math.cos(t) * r), py = Math.round(y + Math.sin(t) * r * 0.55);
+      this.over.rect(W, px + 1, py + 1, 1, 1, 0.05, 0.03, 0.08, a * 0.7);
+      this.over.rect(W, px, py, 1, 1, c[0], c[1], c[2], a);
+    }
+  }
+
+  /** A staged-Vision marker: a ring on the ground where the calling happens, an arrow, the seconds to go
+   *  and (from tier 2) the calling's name; its terrain ghost from tier 3; the Wyrdling it goes to, ringed. */
+  private drawMark(sim: Sim, m: MarkView, time: number): void {
+    const TEAL: Rgb = [0.45, 1, 0.95];
+    const now = m.secs === null;
+    const pulse = 0.75 + 0.25 * Math.sin(time * (now ? 16 : 6));
+    if (m.ghost && !now) this.drawGhost(m.ghost, time);
+    this.ring(m.x, m.y, 9, TEAL, pulse, time);
+    const bob = now ? 0 : Math.round(Math.sin(time * 5) * 2);
+    this.arrowDown(m.x, m.y - 13 + bob, TEAL);
+    this.text(this.over, now ? 'NOW' : String(m.secs), m.x, m.y - 33, 1, 0.95, 0.6, 1);
+    if (m.label) this.text(this.over, m.label, m.x, m.y - 43, TEAL[0], TEAL[1], TEAL[2], 1);
+    const w = sim.d.wyrds[m.id];
+    if (w && isAlive(w) && !now) this.over.push(this.f('cursor.ring', Math.floor(time * 10)), w.x, w.y - 6, { r: TEAL[0], g: TEAL[1], b: TEAL[2], a: 0.85 });
   }
 
   /** What the calling would leave: a dimmed hollow with a light outline where it digs, gold where it weaves. */
@@ -962,6 +1046,11 @@ function endWords(e: FateEnd): [string, Rgb] {
   return [STILL[e.st ?? 'walk'] ?? 'still walking', [0.95, 0.9, 0.8]];
 }
 
+/** The loss comes first and buys what follows. */
+function isSacrifice(d: FateDelta): boolean {
+  return d.lost > 0 && (d.saved > 0 || d.freed > 0) && d.firstLoss <= d.firstGain;
+}
+
 /** What a calling changes for everyone, over the stretch both predictions cover. */
 function deltaWords(d: FateDelta): Seg[] {
   const out: Seg[] = [];
@@ -970,7 +1059,7 @@ function deltaWords(d: FateDelta): Seg[] {
     out.push({ s, c });
   };
   const gains = [d.saved ? `${d.saved} saved` : '', d.freed ? `${d.freed} freed` : ''].filter(Boolean);
-  if (d.lost && gains.length && d.firstLoss <= d.firstGain) {
+  if (isSacrifice(d)) {
     // a sacrifice: the loss comes first and buys what follows, so it shouldn't read as a mistake
     add(`${d.lost} lost`, BAD);
     add(`${gains.join(', ')} later`, GOOD);

@@ -21,7 +21,8 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font-family: var(--font); overscroll-behavior: none; }
+/* no ligatures: Pixelify Sans draws its "fi" like an A ("Arst" for "first") */
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font-family: var(--font); overscroll-behavior: none; font-variant-ligatures: none; }
 body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 #game { position: fixed; inset: 0; display: block; image-rendering: pixelated; }
 /* The HTML UI is laid out for a ~1280x720 screen and scaled up as one layer on bigger screens
@@ -39,7 +40,7 @@ body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit
 /* dialogs must catch every click (outranks the rule above), or clicks fall through to the level */
 #ui > .modal-back { pointer-events: auto; }
 .px { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
-button { font-family: var(--font); color: var(--ink); cursor: pointer; touch-action: manipulation; }
+button { font-family: var(--font); font-variant-ligatures: none; color: var(--ink); cursor: pointer; touch-action: manipulation; }
 h1, h2, h3 { font-weight: 700; margin: 0 0 8px; letter-spacing: 1px; }
 
 /* pixel panel: stepped bevel built from shadows */
@@ -168,7 +169,13 @@ body.portrait:not(.rotate-ok) #rotate {
 .goal { display: flex; gap: 8px; align-items: center; font-size: 16px; color: var(--ink-dim); }
 .goal.got { color: var(--gold-hi); }
 .skill-list { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
-.sk { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #1a1428; font: 14px var(--font-num); box-shadow: inset 0 0 0 2px #3b2f55; }
+/* intro-card callings: named chips; hover or tap one to read what it does */
+.sk { pointer-events: auto; display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; min-height: 40px; border: none; color: var(--ink);
+  background: #1a1428; font: 15px var(--font); box-shadow: inset 0 0 0 2px #3b2f55; }
+.sk:hover, .sk.on { background: #2a2140; box-shadow: inset 0 0 0 2px var(--gold-lo); }
+.sk .n { font: 14px var(--font-num); color: var(--gold-hi); }
+.sk-desc { min-height: 1.3em; margin: 8px auto 0; max-width: 460px; font-size: 15px; line-height: 1.3; color: var(--ink-dim); }
+.sk-desc b { color: var(--gold-hi); }
 .story { max-width: 520px; }
 .story-text { font-size: 19px; line-height: 1.5; min-height: 5.2em; }
 .big-stars { display: flex; justify-content: center; gap: 10px; margin: 6px 0 12px; }
@@ -192,8 +199,10 @@ body.portrait:not(.rotate-ok) #rotate {
 
 .caption { position: absolute; top: 22%; left: 0; right: 0; text-align: center; font-size: 22px; color: var(--teal); text-shadow: 2px 2px 0 #000; opacity: 0; transition: opacity 0.3s; }
 .caption.show { opacity: 1; }
-.vision-banner { position: absolute; top: calc(10px + var(--safe-t)); left: 50%; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
-  padding: 8px 14px; background: rgba(10, 30, 34, 0.85); box-shadow: inset 0 0 0 2px var(--teal); font-size: 16px; }
+/* Skuld's Vision: where the skill bar would be (the read-only HUD keeps the top) */
+.vision-banner { position: absolute; bottom: calc(10px + var(--safe-b)); left: 50%; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
+  padding: 8px 14px; background: rgba(10, 30, 34, 0.85); box-shadow: inset 0 0 0 2px var(--teal); font-size: 16px; width: max-content; max-width: calc(96 * var(--uvw)); }
+.vision-banner .vtier { color: var(--teal); }
 .survey-go { position: absolute; bottom: calc(110px + var(--safe-b)); left: 50%; transform: translateX(-50%); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { filter: brightness(1.25); } }
 
@@ -223,6 +232,25 @@ body.portrait:not(.rotate-ok) #rotate {
 .hint { position: absolute; top: calc(70px + var(--safe-t)); left: 50%; transform: translateX(-50%) translateY(-8px); max-width: min(620px, calc(92 * var(--uvw))); text-align: center;
   padding: 10px 16px; font-size: 17px; background: rgba(19, 15, 30, 0.92); box-shadow: inset 0 0 0 2px var(--gold-lo); opacity: 0; transition: all 0.25s; }
 .hint.show { opacity: 1; transform: translateX(-50%); }
+/* an onboarding moment (once per save): gold-edged, so it reads as the game teaching, not a status line */
+.hint.lesson { font-size: 18px; color: var(--gold-hi); box-shadow: inset 0 0 0 2px var(--gold), 0 0 14px rgba(242, 193, 78, 0.35); }
+/* above the skill bar, display only (clicks pass through to the world): the armed calling, and the notes
+   that point down at the bar */
+.hud-notes { position: absolute; left: calc(8px + var(--safe-l)); right: calc(8px + var(--safe-r)); bottom: calc(112px + var(--safe-b));
+  display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none !important; }
+.armed-info { display: none; max-width: min(620px, calc(92 * var(--uvw))); padding: 5px 12px; font-size: 15px; line-height: 1.3; text-align: center;
+  background: rgba(19, 15, 30, 0.84); box-shadow: inset 0 0 0 2px var(--gold-lo); text-shadow: 2px 2px 0 #000; }
+.armed-info.show { display: block; }
+.armed-info .aname { color: var(--gold-hi); font-weight: 700; letter-spacing: 1px; }
+.armed-info .lesson { display: none; margin-top: 3px; color: var(--teal); }
+.armed-info .lesson.on { display: block; }
+.rewind-tip { display: none; align-items: center; gap: 8px; padding: 6px 12px; font-size: 17px; background: rgba(12, 22, 40, 0.92);
+  box-shadow: inset 0 0 0 2px #9fd3ff, 0 0 14px rgba(120, 190, 255, 0.45); text-shadow: 2px 2px 0 #000; animation: pop 0.22s ease-out; }
+.rewind-tip.show { display: flex; }
+.rewind.teach { animation: rteach 0.9s ease-in-out infinite; }
+@keyframes rteach { 50% { filter: brightness(1.45); box-shadow: inset 0 0 0 2px #0a0710, inset 2px 2px 0 2px #9fd3ff, 0 0 20px 4px rgba(120, 190, 255, 0.85); } }
+.ibtn.teach { animation: pteach 0.9s ease-in-out infinite; }
+@keyframes pteach { 50% { filter: brightness(1.5); box-shadow: inset 0 0 0 2px #0a0710, inset 2px 2px 0 2px var(--gold), 0 0 16px 3px rgba(242, 193, 78, 0.8); } }
 .hud-bottom { position: absolute; bottom: calc(8px + var(--safe-b)); left: calc(8px + var(--safe-l)); right: calc(8px + var(--safe-r)); display: flex; align-items: flex-end; justify-content: center; gap: 10px; pointer-events: none; }
 .hud-bottom > * { pointer-events: auto; }
 .skillbar { display: flex; gap: 4px; padding: 5px; overflow-x: auto; max-width: calc(100% - 90px); scrollbar-width: none; touch-action: pan-x; }
@@ -303,6 +331,16 @@ body.portrait:not(.rotate-ok) #rotate {
   .notice { top: calc(112px + var(--safe-t)); padding: 6px 32px 8px 12px; }
   .notice .ntext { font-size: 14px; margin-bottom: 6px; }
   .verdict { top: calc(56px + var(--safe-t)); font-size: 13px; padding: 5px 10px; }
+  .hint.lesson { font-size: 15px; }
+  .hud-notes { bottom: calc(86px + var(--safe-b)); gap: 4px; }
+  .armed-info { font-size: 13px; padding: 4px 10px; }
+  .rewind-tip { font-size: 14px; padding: 4px 10px; }
+  .vision-banner { font-size: 14px; padding: 5px 10px; gap: 8px; }
+  .sk { min-height: 34px; font-size: 14px; }
+  .sk-desc { font-size: 13px; margin-top: 6px; }
+  /* the intro card fits a landscape phone: goals side by side */
+  .intro .goals { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 4px 16px; width: auto; margin-bottom: 8px; }
+  .intro .flavor { margin: 4px 0 8px; font-size: 14px; }
   .hud.verdict-on .hint { top: calc(88px + var(--safe-t)); }
   .hud.verdict-on .notice { top: calc(146px + var(--safe-t)); }
   .settings { max-width: min(860px, calc(96 * var(--uvw))); }
