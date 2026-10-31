@@ -2,7 +2,6 @@
 // shakes, popups). Purely presentational — never mutates the simulation.
 import * as THREE from 'three';
 import type { ArtBundle } from '../art/bundle';
-import type { RealmId } from '../art/types';
 import { Atlas, type FrameRef } from '../render/atlas';
 import { Background, LiquidLayer, Particles, canvasTex } from '../render/layers';
 import type { Pipeline } from '../render/pipeline';
@@ -11,6 +10,7 @@ import { TerrainLayer } from '../render/terrainLayer';
 import { SLAM_CRUSH, STONE_COOLDOWN, bossCore, bossPhase, magmaLevel, nextAttack, nextStone, surfaceY } from '../sim/boss';
 import { SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
 import { compareFates, type Fate, type FateDelta, type FateEnd, type FateKind, type Ghost } from '../sim/foresight';
+import type { RealmId } from '../sim/level';
 import type { Sim } from '../sim/sim';
 import type { Hazard, SimEvent, Wyrd, WyrdState } from '../sim/state';
 import { isAlive } from '../sim/state';
@@ -60,7 +60,16 @@ export interface MarkView {
   ghost: Ghost | null;
 }
 
-interface Popup { text: string; x: number; y: number; life: number; r: number; g: number; b: number }
+/** A word rising from where something happened. `lift`: how far it has been pushed up out of the way of
+ *  newer popups (it only grows, so a stack never jumps back down). */
+interface Popup { text: string; x: number; y: number; life: number; lift: number; r: number; g: number; b: number }
+
+/** A popup's line height: 8 px glyphs, their shadow and a pixel between lines. */
+const POPUP_LINE = 10;
+/** Surtr's Herald is drawn this far left of where it stands: its cape trails right, and from the arena's
+ *  spot by the right edge it would run past the level (the view never shows beyond it). Its body, sword
+ *  and glow move together; the stones' beam still lands on its chest. */
+const HERALD_INSET = 10;
 interface TempLight { x: number; y: number; r: number; c: [number, number, number]; life: number; max: number }
 
 // Personality. Each fate gets a short, bloodless, slightly comic beat, and a Wyrdling reaching the gate a
@@ -217,6 +226,7 @@ export class GameView {
   private crusherTops: number[] = [];
   shake = 0;
   flash: [number, number, number, number] = [1, 1, 1, 0];
+  private calmOn = false;
   /** the last frame drew a sacrifice label ("1 lost · 3 saved later"), for the lesson that explains it */
   sacrifice = false;
   private atmoT = 0;
@@ -233,7 +243,7 @@ export class GameView {
     this.p = p;
     this.art = art;
     this.atlas = getAtlas(art);
-    const realm = (sim.L.def.realm ?? 'midgard') as RealmId;
+    const realm = sim.L.def.realm;
     this.realm = realm;
     p.clearScenes();
     const v = p.view;
@@ -306,6 +316,14 @@ export class GameView {
       while (y > 0 && sim.terrain.get(c.x, y) === 0) y--;
       return y;
     });
+  }
+
+  /** Settings → Reduce motion: no screen shake, no flashes (the guardian's hurt strobe too), and a backdrop
+   *  that stays put while the camera moves. */
+  setCalm(on: boolean): void {
+    this.calmOn = on;
+    this.bg.setStill(on);
+    if (on) { this.shake = 0; this.flash[3] = 0; }
   }
 
   dispose(): void {
@@ -451,7 +469,14 @@ export class GameView {
   }
 
   private popup(text: string, x: number, y: number, c: [number, number, number] = [1, 0.9, 0.5]): void {
-    this.popups.push({ text, x, y, life: 50, r: c[0], g: c[1], b: c[2] });
+    // saves arriving together count up in one place ('+3') instead of a column of '+1's
+    const n = /^\+(\d+)$/.exec(text);
+    const same = n && this.popups.find((p) => /^\+\d+$/.test(p.text) && Math.abs(p.x - x) < 12 && p.life > 25);
+    if (n && same) {
+      Object.assign(same, { text: `+${Number(same.text.slice(1)) + Number(n[1])}`, y, life: 50, lift: 0 });
+      return;
+    }
+    this.popups.push({ text, x, y, life: 50, lift: 0, r: c[0], g: c[1], b: c[2] });
   }
 
   private event(e: SimEvent, sim: Sim): void {
@@ -521,7 +546,6 @@ export class GameView {
       case 'clink': this.burst(this.sparks, e.x, e.y, 6, [1, 1, 0.8], 1.2, 12, 0.05); break;
       case 'crusher_break': this.burst(this.sparks, e.x, e.y, 40, [1, 0.75, 0.35], 2.4, 30, 0.08, 1); this.matDebris(sim, e.x, e.y, 16, 2); this.shake = Math.max(this.shake, 6); this.popup('WRECKED!', e.x, e.y - 20, [1, 0.7, 0.3]); break;
       case 'bowled': this.burst(this.debris, e.x, e.y, 6, [0.8, 0.7, 0.6], 1, 20, 0.1, 1, true); break;
-      case 'quota_met': this.popup('QUOTA MET!', e.x, e.y - 44, [0.6, 1, 0.6]); break;
       case 'land': this.burst(this.debris, e.x, e.y, 4, this.debrisColors[sim.terrain.get(e.x, e.y + 1)]?.[0] ?? [0.6, 0.5, 0.4], 0.6, 20, 0.08, 1, true); break;
     }
   }
@@ -535,11 +559,11 @@ export class GameView {
     this.bg.setTime(time);
     for (let i = 0; i < this.liquids.length; i++) this.liquids[i].set(sim.L.liquids[i], time);
 
-    // decay effects
+    // decay effects (calm: none at all; event handlers set them freely and they end here)
     this.shake *= Math.pow(0.86, inp.dt);
-    if (this.shake < 0.2) this.shake = 0;
+    if (this.shake < 0.2 || this.calmOn) this.shake = 0;
     this.flash[3] *= Math.pow(0.85, inp.dt);
-    if (this.flash[3] < 0.01) this.flash[3] = 0;
+    if (this.flash[3] < 0.01 || this.calmOn) this.flash[3] = 0;
 
     for (const b of [this.behind, this.ents, this.actors, this.front, this.lights, this.glow, this.over]) b.begin();
 
@@ -969,11 +993,12 @@ export class GameView {
     const b = sim.d.boss;
     if (!b) return;
     const tick = sim.d.tick;
-    const flash: SpriteOpts = b.hurt > 0 && (b.hurt & 2) ? { fr: 1, fg: 1, fb: 1, fa: 0.7 } : {};
+    // hurt: a white strobe, or with Reduce motion one steady pale tint for as long as it lasts
+    const flash: SpriteOpts = b.hurt > 0 && (this.calmOn || (b.hurt & 2)) ? { fr: 1, fg: 1, fb: 1, fa: this.calmOn ? 0.35 : 0.7 } : {};
     const dying = b.hp <= 0;
     const fade = dying ? Math.max(0, 1 - b.dying / 90) : 1;
     if (fade <= 0) return;
-    const shakeX = dying ? Math.round(Math.sin(time * 50) * 3) : 0;
+    const shakeX = dying && !this.calmOn ? Math.round(Math.sin(time * 50) * 3) : 0;
     const phase = bossPhase(b);
     if (b.kind === 'wyrm') {
       const attacking = b.act === 'venom' && b.at >= 10;
@@ -1006,13 +1031,14 @@ export class GameView {
     } else {
       const pose = b.hurt > 0 ? 'herald.body.hurt' : b.act === 'sweep' && b.at < 48 ? 'herald.body.raise' : 'herald.body.idle';
       const sway = Math.round(Math.sin(time * 1.2) * 2);
-      this.behind.push(this.f(pose, Math.floor(time * 2)), b.x + sway + shakeX, b.y + (dying ? b.dying * 0.8 : 0), { ...flash, flip: true, a: fade });
+      const x = b.x - HERALD_INSET;
+      this.behind.push(this.f(pose, Math.floor(time * 2)), x + sway + shakeX, b.y + (dying ? b.dying * 0.8 : 0), { ...flash, flip: true, a: fade });
       // resting sword
       if (!(b.act === 'sweep' && b.at >= 48)) {
         const rot = Math.PI * 0.62 + Math.sin(time * 1.3) * 0.05;
-        this.behind.push(this.f('herald.sword'), b.x - 34 + sway, b.y - 60, { rot, flip: false, smooth: true, a: fade });
+        this.behind.push(this.f('herald.sword'), x - 34 + sway, b.y - 60, { rot, flip: false, smooth: true, a: fade });
       }
-      this.light(b.x - 10, b.y - 70, 110, 1.3, 0.55, 0.2, 0.9 + 0.1 * Math.sin(time * 5));
+      this.light(x - 10, b.y - 70, 110, 1.3, 0.55, 0.2, 0.9 + 0.1 * Math.sin(time * 5));
     }
     void tick;
   }
@@ -1471,10 +1497,28 @@ export class GameView {
     }
   }
 
+  /** Popups stay whole inside the view (a word by the level's edge slides in rather than being cut off),
+   *  and the newest sits where it happened, pushing any older one it would overlap up above it. */
   private drawPopups(dt: number): void {
-    for (const p of this.popups) {
-      const a = Math.min(1, p.life / 15);
-      this.text(this.over, p.text, p.x, Math.round(p.y), p.r, p.g, p.b, a);
+    const v = this.p.view; // camera x, y, view w, h
+    const placed: { x0: number; x1: number; y: number }[] = [];
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      const p = this.popups[i];
+      const half = Math.ceil(this.textWidth(p.text) / 2) + 1;
+      const x = Math.round(Math.max(v.x + half, Math.min(v.x + v.z - half, p.x)));
+      const at = () => Math.round(Math.max(v.y + 1, Math.min(v.y + v.w - POPUP_LINE, p.y - p.lift)));
+      let y = at();
+      for (let guard = 0; guard < 12; guard++) {
+        const hit = placed.find((r) => x - half < r.x1 && x + half > r.x0 && Math.abs(y - r.y) < POPUP_LINE);
+        if (!hit) break;
+        const want = hit.y - POPUP_LINE;
+        // no room above inside the view: overlap rather than leave it
+        if (want < v.y + 1) break;
+        p.lift += y - want;
+        y = at();
+      }
+      placed.push({ x0: x - half, x1: x + half, y });
+      this.text(this.over, p.text, x, y, p.r, p.g, p.b, Math.min(1, p.life / 15));
       p.y -= 0.35 * dt;
       p.life -= dt;
     }

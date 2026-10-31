@@ -16,9 +16,9 @@ import { SolutionPlayer } from '../sim/solution';
 import { isAlive } from '../sim/state';
 import { Timeline } from '../sim/timeline';
 import { Replayer, WeaveRecorder, type Weave } from '../sim/weave';
-import { Hud, type VerdictView } from '../ui/hud';
+import { barSlots, Hud, type VerdictView } from '../ui/hud';
 import { ambiguous, candidates, cycleSet, nextInCycle, type Candidate } from './crowd';
-import { Input } from './input';
+import { actionFor, Input, keysName, SLOT_ACTIONS, type KeyBinds } from './input';
 import { SoundMapper } from './sound';
 import { AttemptLog } from './stats';
 import { GameView, type Insets, type MarkView } from './view';
@@ -72,7 +72,17 @@ export interface PlayConfig {
   replay?: Weave;
   /** Skuld's Vision (no replay): how much of the quota route it shows (see vision.ts); default 4, all of it. */
   visionTier?: VisionTier;
+  /** the player's key bindings (Settings → Keys); the scene reads them live */
+  keys: KeyBinds;
+  /** Settings → Reduce motion: no screen shake or flashes, a still backdrop */
+  reduceMotion: boolean;
+  /** how far from a Wyrdling a finger still picks it, in world px */
+  touchReach: number;
 }
+
+/** The speed steps F cycles through, from 1×: faster, fastest, then slower than real time. */
+const SPEEDS = [1, 2, 4, 0.5] as const;
+export type Speed = (typeof SPEEDS)[number];
 
 export interface PlayResult {
   saved: number;
@@ -138,7 +148,7 @@ export class PlayScene {
   private hoverKey = '';
   state: 'intro' | 'play' | 'done' = 'intro';
   paused = false;
-  speed: 1 | 2 | 4 = 1;
+  speed: Speed = 1;
   armed: SkillId | null = null;
   hover: number | null = null;
   private hoverPt: { x: number; y: number; touch: boolean } | null = null;
@@ -203,6 +213,7 @@ export class PlayScene {
     p.levelW = cfg.level.width;
     p.levelH = cfg.level.height;
     this.view = new GameView(p, art, this.sim);
+    this.view.setCalm(cfg.reduceMotion);
     this.timeline = new Timeline();
     this.timeline.record(this.sim);
     if (cfg.mode === 'vision' && !cfg.replay) {
@@ -246,9 +257,15 @@ export class PlayScene {
         closeNotice: () => { this.noticeClosed = this.loops.loop; },
         restart: () => hooks.restart(),
         menu: () => hooks.menu(),
-      }, cfg.mode === 'vision');
+      }, cfg.keys, cfg.mode === 'vision');
     }
     if (cfg.mode !== 'attract') this.bindInput();
+  }
+
+  /** Settings changed while the level is open: keys, motion. */
+  settingsChanged(): void {
+    this.view.setCalm(this.cfg.reduceMotion);
+    this.hud?.setKeys(this.cfg.keys);
   }
 
   dispose(): void {
@@ -361,15 +378,18 @@ export class PlayScene {
     };
   }
 
-  /** True when the key is the game's (Tab then never moves the page's focus). */
+  /** Keys go by the player's bindings (Settings → Keys); Esc, Q, Tab, zoom and the camera keys are fixed, and
+   *  give way to an action bound to the same key. True when the key is the game's (Tab then never moves the
+   *  page's focus). */
   private key(code: string, down: boolean, repeat: boolean): boolean | void {
+    const act = actionFor(this.cfg.keys, code);
     if (this.cfg.mode !== 'play') {
       // the Vision's read-only HUD: pause and speed, and Esc for the menu
       if (!down || repeat) return;
       if (code === 'Escape') this.hooks.menu();
       else if (this.hooks.dialogOpen()) return;
-      else if (code === 'Space' || code === 'KeyP') this.togglePause();
-      else if (code === 'KeyF') this.cycleSpeed();
+      else if (act === 'pause') this.togglePause();
+      else if (act === 'speed') this.cycleSpeed();
       return;
     }
     if (code === 'Blur') { this.setRewind(false); this.projectKey = false; return; }
@@ -377,25 +397,29 @@ export class PlayScene {
     // stops in toggle mode), Space would set the level running behind the intro card or pause menu
     if (this.hooks.dialogOpen() && code !== 'Escape') return;
     // key repeat must not restart a rewind that stopped at the first tick (or flip a toggle)
-    if (code === 'KeyR' || code === 'Backspace') { if (!repeat) this.rewindInput(down); return; }
-    if (code === 'KeyQ') { this.projectKey = down; return; }
-    if (code === 'Tab') {
+    if (act === 'rewind') { if (!repeat) this.rewindInput(down); return; }
+    if (code === 'KeyQ' && !act) { this.projectKey = down; return; }
+    if (code === 'Tab' && !act) {
       if (down) this.cycle(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? -1 : 1);
       return true;
     }
     if (!down || repeat) return;
-    const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(code);
-    if (idx >= 0) {
-      const s = SKILLS[idx];
-      if (this.cfg.level.skills[s] !== undefined) this.selectSkill(s);
+    const shift = this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight');
+    const slot = act ? SLOT_ACTIONS.indexOf(act) : -1;
+    if (slot >= 0) {
+      // slot keys follow the bar: 1 is its leftmost calling, whichever that is on this level
+      const s = barSlots(this.cfg.level.skills)[slot];
+      if (s) this.selectSkill(s);
       return;
     }
+    switch (act) {
+      case 'stepFwd': this.stepTicks(shift ? TICK_RATE : 1); return;
+      case 'stepBack': this.stepTicks(shift ? -TICK_RATE : -1); return;
+      case 'pause': this.pauseInput(); return;
+      case 'speed': this.cycleSpeed(); return;
+      case 'foresight': this.toggleForesight(); return;
+    }
     switch (code) {
-      case 'Period': this.stepTicks(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? TICK_RATE : 1); break;
-      case 'Comma': this.stepTicks(this.input?.held.has('ShiftLeft') || this.input?.held.has('ShiftRight') ? -TICK_RATE : -1); break;
-      case 'Space': case 'KeyP': this.pauseInput(); break;
-      case 'KeyF': this.cycleSpeed(); break;
-      case 'KeyV': this.toggleForesight(); break;
       // Esc first puts an armed calling away; with nothing armed (or a dialog open) it is the menu key
       case 'Escape': if (this.hooks.dialogOpen() || !this.disarm()) this.hooks.menu(); break;
       case 'Equal': case 'NumpadAdd': this.input?.h.zoom?.(1); break;
@@ -434,8 +458,9 @@ export class PlayScene {
   }
 
   cycleSpeed(): void {
-    this.speed = this.speed === 1 ? 2 : this.speed === 2 ? 4 : 1;
-    audio.setSpeed(this.speed);
+    this.speed = SPEEDS[(SPEEDS.indexOf(this.speed) + 1) % SPEEDS.length];
+    // the audio's fast-forward colour has nothing for slow motion: half speed sounds as 1x
+    audio.setSpeed(this.speed === 0.5 ? 1 : this.speed);
     audio.sfx('ui_click');
   }
 
@@ -544,12 +569,14 @@ export class PlayScene {
     }
     this.view.handleEvents(this.sim.events, this.sim);
     if (sound && this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim, this.camX, this.p.viewW);
+    // the quota is level-wide news: a HUD banner, not a word over the gate the view may cut off
+    if (this.sim.events.some((e) => e.type === 'quota_met')) this.hud?.banner('QUOTA MET!');
   }
 
   /** The living Wyrdlings under world (wx, wy), best first (see crowd.ts). */
   private under(wx: number, wy: number, touch: boolean): Candidate[] {
     const armed = this.armed;
-    return candidates(this.sim.d.wyrds, wx, wy, touch, (w) => (armed ? this.sim.canAssign(w, armed) : true));
+    return candidates(this.sim.d.wyrds, wx, wy, touch, (w) => (armed ? this.sim.canAssign(w, armed) : true), touch ? this.cfg.touchReach : undefined);
   }
 
   /** Who a click or tap at world (wx, wy) hits: the one chosen by cycling while it is still under the
@@ -650,7 +677,7 @@ export class PlayScene {
         this.doomPause = false;
         // a lesson about being paused, even if the sacrifice lesson took the hint box in between: unpausing hides it
         this.pausedLesson = true;
-        this.hud?.hint(noHover() ? 'Now press ▶ to play on.' : 'Now press ▶ (or Space) to play on.', 600, true);
+        this.hud?.hint(noHover() ? 'Now press ▶ to play on.' : `Now press ▶ (or ${keysName(this.cfg.keys, 'pause')}) to play on.`, 600, true);
         this.hud?.pulsePause(true);
       }
     } else {
@@ -711,8 +738,10 @@ export class PlayScene {
     const held = this.input?.held;
     if (held && this.cfg.mode === 'play') {
       const sp = 260 * dt;
-      const ax = (held.has('ArrowRight') || held.has('KeyD') ? 1 : 0) - (held.has('ArrowLeft') || held.has('KeyA') ? 1 : 0);
-      const ay = (held.has('ArrowDown') || held.has('KeyS') ? 1 : 0) - (held.has('ArrowUp') || held.has('KeyW') ? 1 : 0);
+      // a camera key bound to an action does that action instead
+      const k = (a: string, b: string) => [a, b].some((c) => held.has(c) && !actionFor(this.cfg.keys, c)) ? 1 : 0;
+      const ax = k('ArrowRight', 'KeyD') - k('ArrowLeft', 'KeyA');
+      const ay = k('ArrowDown', 'KeyS') - k('ArrowUp', 'KeyW');
       if (ax || ay) { this.camX += ax * sp; this.camY += ay * sp; this.userPanned = true; this.clampCam(); }
     }
     const bossCam = !!this.sim.d.boss && this.sim.d.boss.hp > 0;
@@ -822,6 +851,7 @@ export class PlayScene {
     this.view.dispose();
     this.sim = Sim.create(this.cfg.level);
     this.view = new GameView(this.p, this.art, this.sim);
+    this.view.setCalm(this.cfg.reduceMotion);
     this.solution = new SolutionPlayer(visionRoute(this.cfg.level));
     this.timeline.clear();
   }
@@ -1001,7 +1031,8 @@ export class PlayScene {
 
   render(): void {
     if (this.debugCam) { this.camX = this.debugCam.x; this.camY = this.debugCam.y; this.clampCam(); }
-    const shake = this.view.shake;
+    // Reduce motion keeps the camera still (the view builds up no shake then either)
+    const shake = this.cfg.reduceMotion ? 0 : this.view.shake;
     const sx = shake ? Math.round((Math.random() - 0.5) * shake) : 0;
     const sy = shake ? Math.round((Math.random() - 0.5) * shake) : 0;
     // screen shake must not reveal anything past the level edges either

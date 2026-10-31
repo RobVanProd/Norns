@@ -6,7 +6,7 @@ import {
   WEAVE_CYCLE, WEAVE_PLANKS, WYRD_HEIGHT, isDiggable, isIndestructible, type SkillId,
 } from './constants';
 import { buildTerrain, type EntityDef, type LevelDef } from './level';
-import { isAlive, type SimData, type SimEvent, type Wyrd, type WyrdState } from './state';
+import { isAlive, type SimData, type SimEvent, type SimEventType, type Wyrd, type WyrdState } from './state';
 import { Terrain, CS_SHIFT } from './terrain';
 import { stepBodies, wakeBodies, bodyImpulse } from './physics';
 import { stepSand, activateSand } from './sand';
@@ -145,7 +145,7 @@ export class Sim {
     return !this.L.exit.locked && !bossLocksExit(this);
   }
 
-  emit(type: string, x: number, y: number, id?: number, s?: string, v?: number): void {
+  emit(type: SimEventType, x: number, y: number, id?: number, s?: string, v?: number): void {
     this.events.push({ type, x, y, id, s, v });
   }
 

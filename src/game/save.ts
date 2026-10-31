@@ -3,6 +3,7 @@
 import { REALM_LIST, type RealmInfo } from '../levels';
 import type { LevelDef } from '../sim/level';
 import { decodeWeave, encodeWeave, isStale, type Weave } from '../sim/weave';
+import { defaultKeys, readKeys, type KeyBinds } from './input';
 
 export const HOODS: { id: string; name: string; hue: number | null; cost: number }[] = [
   { id: 'teal', name: 'Loom Teal', hue: null, cost: 0 },
@@ -30,6 +31,37 @@ export interface BestWeave {
   ticks: number;
 }
 
+export interface Settings {
+  music: number;
+  sfx: number;
+  /** Wyrdling barks */
+  voice: number;
+  foresight: boolean;
+  hints: boolean;
+  zoom: number;
+  rewindToggle: boolean;
+  verdict: boolean;
+  /** fate colours: 'classic' red / green or 'cvd' blue / orange (see setPalette in view.ts) */
+  palette: 'classic' | 'cvd';
+  /** no screen shake or flashes, a still backdrop and calmer UI animation (default: the system's setting) */
+  reduceMotion: boolean;
+  /** HTML text size, ×1 to ×1.5 */
+  textSize: number;
+  /** how far from a Wyrdling a finger still picks it, in world px */
+  touchReach: number;
+  keys: KeyBinds;
+}
+
+/** Text sizes Settings offers. */
+export const TEXT_SIZES = [1, 1.25, 1.5];
+/** Touch reach range (world px); the default is the reach before it was a setting. */
+export const TOUCH_REACH = { min: 8, max: 20, def: 12 };
+
+/** The system asks for less motion (the Reduce motion setting starts from this). */
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 export interface SaveData {
   v: 1;
   stars: Record<string, number>;
@@ -40,8 +72,7 @@ export interface SaveData {
   hoods: string[];
   /** Ids of every level ever opened. Unlocks stick, so a level added to a realm later never relocks one. */
   opened: string[];
-  /** palette: fate colours, 'classic' red / green or 'cvd' blue / orange (see setPalette in view.ts) */
-  settings: { music: number; sfx: number; voice: number; foresight: boolean; hints: boolean; zoom: number; crt: boolean; rewindToggle: boolean; verdict: boolean; palette: 'classic' | 'cvd' };
+  settings: Settings;
   seenIntro: boolean;
   /** best run per level id ("Watch your best") */
   weaves: Record<string, BestWeave>;
@@ -67,7 +98,11 @@ function legacyOpened(stars: Record<string, number>): string[] {
 function fresh(): SaveData {
   const s: SaveData = {
     v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
-    settings: { music: 0.7, sfx: 0.85, voice: 0.7, foresight: true, hints: true, zoom: 0, crt: false, rewindToggle: false, verdict: true, palette: 'classic' }, seenIntro: false,
+    settings: {
+      music: 0.7, sfx: 0.85, voice: 0.7, foresight: true, hints: true, zoom: 0, rewindToggle: false, verdict: true, palette: 'classic',
+      reduceMotion: prefersReducedMotion(), textSize: 1, touchReach: TOUCH_REACH.def, keys: defaultKeys(),
+    },
+    seenIntro: false,
     weaves: {}, seen: [], visionTier: {},
   };
   refreshOpened(s);
@@ -82,13 +117,16 @@ export function loadSave(): SaveData {
     const f = fresh();
     const refund = RETIRED_REWIND_COSTS.slice(0, d.upgrades?.rewind ?? 0).reduce((a, b) => a + b, 0);
     const stars = d.stars ?? {};
+    // the CRT flag never did anything and is gone; keys are checked one by one
+    const settings: Record<string, unknown> = { ...d.settings };
+    delete settings.crt;
     const s = {
       ...f, ...d, threads: (d.threads ?? 0) + refund, stars,
       // a save with no opened list keeps what the old linear order opened; today's rules add to it below
       opened: Array.isArray(d.opened) ? d.opened : legacyOpened(stars),
       weaves: d.weaves && typeof d.weaves === 'object' ? d.weaves : {},
       seen: Array.isArray(d.seen) ? d.seen : [], visionTier: d.visionTier && typeof d.visionTier === 'object' ? d.visionTier : {},
-      upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...d.settings },
+      upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...settings, keys: readKeys(settings.keys) },
     } as SaveData;
     refreshOpened(s);
     return s;

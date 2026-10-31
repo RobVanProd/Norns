@@ -5,11 +5,11 @@
 import { audio, barkPitch, type SfxId } from '../audio';
 import { FALL_DEATH } from '../sim/constants';
 import type { Sim } from '../sim/sim';
-import type { SimEvent, Wyrd } from '../sim/state';
+import type { SimEvent, SimEventType, Wyrd } from '../sim/state';
 
 const FIRE = new Set(['lava', 'fire', 'sweep', 'magma', 'meteor', 'burn']);
 
-const DIRECT: Record<string, SfxId> = {
+const DIRECT: Partial<Record<SimEventType, SfxId>> = {
   spawn: 'spawn', gate_open: 'gate_open', quota_met: 'quota_met', assign: 'assign', dig: 'dig', bash: 'bash', mine: 'mine',
   shrug: 'shrug', land: 'land', leap: 'leap', rune_plant: 'rune_plant', rune_tick: 'rune_tick', blast: 'blast',
   boulder_roll: 'boulder_roll', boulder_impact: 'boulder_impact', stone_harden: 'stone_harden', plate_on: 'plate_on',
@@ -21,7 +21,7 @@ const DIRECT: Record<string, SfxId> = {
   hazard_magma: 'magma', meteor: 'meteor', inhale: 'boss_roar', clink: 'ui_deny', crusher_break: 'boulder_impact', bowled: 'land',
 };
 
-const QUIET: Partial<Record<string, number>> = { dig: 0.5, bash: 0.55, mine: 0.55, sand: 0.4, boulder_roll: 0.5, clink: 0.35, rune_tick: 0.6, spawn: 0.6 };
+const QUIET: Partial<Record<SimEventType, number>> = { dig: 0.5, bash: 0.55, mine: 0.55, sand: 0.4, boulder_roll: 0.5, clink: 0.35, rune_tick: 0.6, spawn: 0.6 };
 
 /** Events a Wyrdling answers with a bark (its id is the event's id). */
 const EVENT_BARK: Partial<Record<string, SfxId>> = { spawn: 'bark_hup', assign: 'bark_mm', saved: 'bark_yay' };

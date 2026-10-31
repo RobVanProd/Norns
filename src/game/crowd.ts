@@ -18,8 +18,9 @@ export interface Candidate {
  * Every living Wyrdling under the pointer at world (wx, wy), best first: the nearest, with those that
  * can take the armed calling ahead of those that can't (a 6 px head start), then by id.
  */
-export function candidates(wyrds: readonly Wyrd[], wx: number, wy: number, touch: boolean, ok: (w: Wyrd) => boolean): Candidate[] {
-  const r = touch ? PICK_R.touch : PICK_R.mouse;
+export function candidates(wyrds: readonly Wyrd[], wx: number, wy: number, touch: boolean, ok: (w: Wyrd) => boolean, reach?: number): Candidate[] {
+  // reach: the player's touch-reach setting (Settings → Access), in world px
+  const r = reach ?? (touch ? PICK_R.touch : PICK_R.mouse);
   const out: Candidate[] = [];
   for (const w of wyrds) {
     if (!isAlive(w)) continue;
