@@ -284,7 +284,8 @@ function earth(P: RealmPal, realm: RealmId, seed: number): Tiles {
       const x = 6 + Math.floor(dr() * 52), h = 3 + Math.floor(dr() * 3);
       for (let r = 0; r < h; r++) setx(t.deco, x, 15 - r, P.leaf[2 + (r > 1 ? 1 : 0)]);
       setx(t.deco, x - 1, 15 - h + 1, P.leaf[4]);
-      const petal = k === 0 ? P.accent[3] : P.accent[0];
+      // white and violet petals, never red: doomed Foresight threads run along this grass
+      const petal = k === 0 ? P.accent[3] : P.accent[4];
       const yy = 15 - h;
       setx(t.deco, x, yy, P.accent[2]);
       setx(t.deco, x - 1, yy, petal); setx(t.deco, x + 1, yy, mix(petal, P.leaf[1], 0.35));

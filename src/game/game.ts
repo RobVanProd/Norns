@@ -15,7 +15,7 @@ import {
   type SaveData,
 } from './save';
 import { eraseStats, levelStats, loadStats, logFinish, logQuit, playtestReport, writeStats, type QuitPoint, type Stats } from './stats';
-import { setHood } from './view';
+import { setHood, setPalette, type PaletteId } from './view';
 import { VISION_TIERS, type VisionTier } from './vision';
 
 /** What a partial Vision leaves the player with (tier 4 says what the whole path saved). */
@@ -51,6 +51,7 @@ export class Game {
     this.save = loadSave();
     this.stats = loadStats();
     setHood(this.save.hood);
+    this.applyPalette(this.save.settings.palette);
     p.zoomOffset = this.save.settings.zoom;
     audio.setVolumes({ music: this.save.settings.music, sfx: this.save.settings.sfx, voice: this.save.settings.voice });
     this.screenEl = el('div', { class: 'screen' });
@@ -85,8 +86,15 @@ export class Game {
       (window as unknown as { __norns: unknown }).__norns = {
         scene: () => this.scene, SolutionPlayer,
         manual: (on: boolean) => this.setManualClock(on), step: (dt: number) => this.debugStep(dt),
+        palette: (id: PaletteId) => this.applyPalette(id),
       };
     }
+  }
+
+  /** Fate colours in the world (threads, rings, words over a Wyrdling) and in the HUD (verdict, doom count). */
+  private applyPalette(id: PaletteId): void {
+    setPalette(id);
+    this.ui.classList.toggle('cvd', id === 'cvd');
   }
 
   private resize(): void {
@@ -608,6 +616,17 @@ export class Game {
       if (this.scene) this.scene.cfg.rewindToggle = s.rewindToggle;
       writeSave(this.save);
     });
+    const palette = el('select', {});
+    for (const [v, t] of [['classic', 'Red / green'], ['cvd', 'Blue / orange']] as const) {
+      const o = el('option', { value: v, text: t });
+      if (s.palette === v) o.selected = true;
+      palette.append(o);
+    }
+    palette.addEventListener('change', () => {
+      s.palette = palette.value === 'cvd' ? 'cvd' : 'classic';
+      this.applyPalette(s.palette);
+      writeSave(this.save);
+    });
     const done = el('button', { class: 'btn gold', text: 'Done' });
     const close = () => { writeSave(this.save); this.closeModal(); back?.(); };
     done.addEventListener('click', () => { audio.sfx('ui_click'); close(); });
@@ -660,7 +679,9 @@ export class Game {
           el('h3', { text: 'Assists' }),
           toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
           toggle('Verdict', s.verdict, (v) => { s.verdict = v; if (this.scene) this.scene.cfg.verdict = v; },
-            'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'))),
+            'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'),
+          el('label', { class: 'set', title: 'Colours for doomed and saved fates. Their thread patterns (dashes, dots, diamonds) differ in either.' },
+            el('span', { text: 'Fate colours' }), palette))),
       el('div', { class: 'row' }, fs, copy, reset),
       copied,
       el('div', { class: 'row' }, done)), close);
