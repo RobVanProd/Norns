@@ -46,6 +46,8 @@ export interface MarkView {
   label: string | null;
   /** whole seconds left before it happens; null once it has */
   secs: number | null;
+  /** it has happened and the Vision granted it: the grant's popup rises where NOW would be, so only the ring stays */
+  granted: boolean;
   /** what the calling will leave in the terrain (tier 3 on) */
   ghost: Ghost | null;
 }
@@ -941,9 +943,11 @@ export class GameView {
     const pulse = 0.75 + 0.25 * Math.sin(time * (now ? 16 : 6));
     if (m.ghost && !now) this.drawGhost(m.ghost, time);
     this.ring(m.x, m.y, 9, TEAL, pulse, time);
-    const bob = now ? 0 : Math.round(Math.sin(time * 5) * 2);
-    this.arrowDown(m.x, m.y - 13 + bob, TEAL);
-    this.text(this.over, now ? 'NOW' : String(m.secs), m.x, m.y - 33, 1, 0.95, 0.6, 1);
+    if (!m.granted) {
+      const bob = now ? 0 : Math.round(Math.sin(time * 5) * 2);
+      this.arrowDown(m.x, m.y - 13 + bob, TEAL);
+      this.text(this.over, now ? 'NOW' : String(m.secs), m.x, m.y - 33, 1, 0.95, 0.6, 1);
+    }
     if (m.label) this.text(this.over, m.label, m.x, m.y - 43, TEAL[0], TEAL[1], TEAL[2], 1);
     const w = sim.d.wyrds[m.id];
     if (w && isAlive(w) && !now) this.over.push(this.f('cursor.ring', Math.floor(time * 10)), w.x, w.y - 6, { r: TEAL[0], g: TEAL[1], b: TEAL[2], a: 0.85 });

@@ -70,11 +70,14 @@ export class Game {
     const q = new URLSearchParams(location.search);
     const direct = ALL_LEVELS.find((l) => l.id === (q.get('level') ?? q.get('vision')));
     if (direct) {
-      // &vision watches the whole quota route; &tier=1-4 picks a stage (dev tooling: frames of each one)
+      // dev tooling (see AGENTS.md): &vision watches Skuld's Vision of the whole quota route, &tier=1-4 one
+      // stage of it, &solution plays the whole scripted solution (spindle steps too) as an attempt
+      const dev = import.meta.env.DEV;
       const tier = Number(q.get('tier') ?? 4);
-      if (q.has('vision')) this.playLevel(direct, 'vision', undefined, tier >= 1 && tier <= 4 ? tier as VisionTier : 4);
+      if (dev && q.has('vision')) this.playLevel(direct, 'vision', undefined, tier >= 1 && tier <= 4 ? tier as VisionTier : 4);
       else this.playLevel(direct);
       if (q.has('go')) { this.closeModal(); this.scene?.begin(); }
+      if (dev && q.has('solution') && this.scene?.cfg.mode === 'play') this.scene.debugSolution();
     } else this.showTitle();
     requestAnimationFrame((t) => this.frame(t));
     // dev-only hook for scripts/frames.mjs, scripts/clicktest.mjs and agents (see AGENTS.md)

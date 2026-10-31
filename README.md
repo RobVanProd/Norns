@@ -55,7 +55,7 @@ Other ways to run it:
 | Static website | `npm run build` | `dist/`: host it anywhere, paths are relative |
 | One file you can send or open offline | `node scripts/artifact.mjs norns.html` | a single self-contained `norns.html` |
 | Jump straight into a level | open `http://localhost:5173/?level=m2&go` | level ids are `m1`–`m5`, `n1`–`n5`, `u1`–`u5` |
-| Watch a verified solution | open `http://localhost:5173/?level=m2&vision&go` | Skuld's Vision replays it |
+| Watch a verified solution | open `http://localhost:5173/?level=m2&solution&go` | plays the level's scripted solution (dev server only) |
 
 Progress (stars, Threads, upgrades, settings) is saved in the browser's `localStorage`.
 

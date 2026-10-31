@@ -53,6 +53,12 @@ describe('staged Vision', () => {
         const full = runLevel(def, route, LEVEL_TICKS).sim;
         const again = replayMarks(def, marks.length);
         expect([again.d.saved, again.d.dead, again.d.spindle, again.d.tick]).toEqual([full.d.saved, full.d.dead, full.d.spindle, full.d.tick]);
+        // a tier plans only the marks it shows, and they are the whole plan's first ones
+        const key = (m: (typeof marks)[number]) => [m.step, m.tick, m.id, m.x, m.y];
+        for (const tier of [1, 3] as VisionTier[]) {
+          const k = shownMarks(tier, route.length);
+          expect(planVision(def, 0, k).map(key), `tier ${tier}`).toEqual(marks.slice(0, k).map(key));
+        }
       });
     });
   }

@@ -59,16 +59,18 @@ export function lingerTicks(tier: VisionTier): number {
 /**
  * Play the route headlessly, the way Skuld's Vision plays it (each step on the first tick its
  * conditions hold, in solution order), and note each step's mark. The first `ghosts` marks also get
- * the terrain ghost of their calling, from a Foresight branch at that moment.
+ * the terrain ghost of their calling, from a Foresight branch at that moment. Planning stops after
+ * the first `limit` marks (a tier that shows only those needn't wait for the rest).
  */
-export function planVision(def: LevelDef, ghosts = 0): VisionMark[] {
+export function planVision(def: LevelDef, ghosts = 0, limit = Infinity): VisionMark[] {
   const route = visionRoute(def);
   const sim = Sim.create(def);
   const done = route.map(() => false);
   const marks: VisionMark[] = [];
-  while (sim.d.tick < PLAN_TICKS && !sim.d.finished && marks.length < route.length) {
+  const want = Math.min(route.length, limit);
+  while (sim.d.tick < PLAN_TICKS && !sim.d.finished && marks.length < want) {
     route.forEach((s, i) => {
-      if (done[i] || !stepReady(sim, s)) return;
+      if (done[i] || marks.length >= want || !stepReady(sim, s)) return;
       const w = sim.d.wyrds[s.nth];
       const before = marks.length < ghosts ? sim.clone() : null;
       if (!sim.assign(s.nth, s.skill)) return;

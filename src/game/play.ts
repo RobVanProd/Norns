@@ -193,13 +193,14 @@ export class PlayScene {
     this.timeline = new Timeline();
     this.timeline.record(this.sim);
     if (cfg.mode === 'vision' && !cfg.replay) {
-      // the quota route, planned up front: tiers 1-2 only point at its first calling, 3-4 play what they show
+      // the quota route, planned up front only as far as this tier shows: tiers 1-2 only point at its
+      // first calling, 3-4 play what they show
       const tier = cfg.visionTier ?? 4;
       const n = visionRoute(cfg.level).length;
-      const all = planVision(cfg.level, tier >= 3 ? shownMarks(tier, n) : 0);
-      this.marks = all.slice(0, shownMarks(tier, all.length));
-      this.played = playedMarks(tier, all.length);
-      this.solution = new MarkScript(all.slice(0, this.played));
+      const shown = shownMarks(tier, n);
+      this.marks = planVision(cfg.level, tier >= 3 ? shown : 0, shown);
+      this.played = Math.min(playedMarks(tier, n), this.marks.length);
+      this.solution = new MarkScript(this.marks.slice(0, this.played));
       const last = this.marks[this.marks.length - 1];
       if (tier < 4 && last) this.visionEnd = last.tick + lingerTicks(tier);
       this.state = 'play';
@@ -267,9 +268,10 @@ export class PlayScene {
     this.pendingTip = this.cfg.rewindToggle ? t.replace('Hold REWIND', 'Tap REWIND') : t;
   }
 
-  /** True (and the lesson is spent) if this save has not been taught `key` and tutorial hints are on. */
+  /** True (and the lesson is spent) if this save has not been taught `key` and tutorial hints are on.
+   *  A scripted play mode (dev tooling) is taught nothing: the doom lesson's pause would stop the script. */
   private teach(key: Lesson): boolean {
-    if (!this.hud || this.cfg.mode !== 'play' || !this.cfg.hints || !this.hooks.fresh(key)) return false;
+    if (!this.hud || this.cfg.mode !== 'play' || this.solution || !this.cfg.hints || !this.hooks.fresh(key)) return false;
     this.hooks.learn(key);
     return true;
   }
@@ -593,6 +595,8 @@ export class PlayScene {
       // the doom lesson's calling is in: the pause it made is the player's to end
       if (this.doomPause) {
         this.doomPause = false;
+        // a lesson about being paused, even if the sacrifice lesson took the hint box in between: unpausing hides it
+        this.pausedLesson = true;
         this.hud?.hint(noHover() ? 'Now press ▶ to play on.' : 'Now press ▶ (or Space) to play on.', 600, true);
         this.hud?.pulsePause(true);
       }
@@ -776,7 +780,7 @@ export class PlayScene {
       const label = named && (secs !== null || i >= this.played) ? name : null;
       const same = out.find((v) => v.id === m.id && v.x === m.x && v.y === m.y);
       if (same) { if (same.label && label) same.label += ` + ${label}`; continue; }
-      out.push({ x: m.x, y: m.y, id: m.id, label, secs, ghost: m.ghost });
+      out.push({ x: m.x, y: m.y, id: m.id, label, secs, granted: secs === null && i < this.played, ghost: m.ghost });
     }
     return out;
   }
@@ -895,6 +899,11 @@ export class PlayScene {
     return true;
   }
 
+  /** Dev tooling (&solution): play the level's whole scripted solution, spindle steps too, as this attempt. */
+  debugSolution(): void {
+    this.solution = new SolutionPlayer(this.cfg.level.solution);
+  }
+
   /** Dev tooling (scripts/frames.mjs): advance exactly n ticks with the same per-tick work as update(). */
   debugAdvance(n: number): void {
     for (let i = 0; i < n && !this.sim.d.finished; i++) this.tick(false);
@@ -959,7 +968,8 @@ export class PlayScene {
       this.hud.update({
         name: this.cfg.level.name, out: this.sim.aliveCount, toCome: this.total - d.spawned, saved: d.saved,
         quota: this.cfg.level.quota, target: this.cfg.level.target, total: this.total,
-        spindle: this.sim.L.spindle ? d.spindle : null, skills: d.skills, armed: this.armed, paused: this.paused,
+        // armed: the calling stays armed under the results (Rewind from there keeps it), but its card goes
+        spindle: this.sim.L.spindle ? d.spindle : null, skills: d.skills, armed: this.state === 'done' ? null : this.armed, paused: this.paused,
         speed: this.speed, foresight: this.cfg.foresight, rewinding: this.rewinding, rewindToggle: this.cfg.rewindToggle,
         rewindSec: Math.max(0, (d.tick - this.timeline.oldestTick) / TICK_RATE),
         boss: b ? { hp: Math.max(0, b.hp), max: b.maxHp, name: BOSS_NAMES[b.kind] ?? b.kind } : null,
