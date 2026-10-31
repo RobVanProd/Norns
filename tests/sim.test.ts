@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SLEEP_TICKS } from '../src/sim/physics';
 import { Sim } from '../src/sim/sim';
 import { flatLevel, runLevel, runSim } from './helpers';
 
@@ -158,6 +159,25 @@ describe('wyrdling basics', () => {
     runSim(sim, def.solution, 400);
     expect(sim.terrain.get(63, 117)).toBe(0); // crater
     expect(sim.d.dead).toBe(0);
+  });
+});
+
+describe('boulders', () => {
+  it('a resting boulder falls asleep and holds still, and wakes when the ground under it is dug away', () => {
+    const def = flatLevel({ entities: [{ type: 'entrance', x: 30, y: 80 }, { type: 'exit', x: 290, y: 119 }, { type: 'boulder', x: 200, y: 100, r: 8 }] });
+    const sim = Sim.create(def);
+    const b = sim.d.bodies[0];
+    for (let i = 0; i < 120 && b.sleep < SLEEP_TICKS; i++) sim.step();
+    expect(b.sleep, 'asleep within 4 s').toBeGreaterThanOrEqual(SLEEP_TICKS);
+    expect(b.y + b.r).toBeGreaterThan(119);
+    const rest = JSON.stringify(b);
+    for (let i = 0; i < 60; i++) sim.step();
+    expect(JSON.stringify(b), 'exactly the same state').toBe(rest);
+    // a sleeping body skips physics, so every terrain change beneath it must wake it
+    sim.carveRect(190, 120, 210, 159);
+    expect(b.sleep).toBe(0);
+    for (let i = 0; i < 10; i++) sim.step();
+    expect(b.y).toBeGreaterThan(110);
   });
 });
 
