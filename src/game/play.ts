@@ -511,7 +511,7 @@ export class PlayScene {
         if (this.recorder) { this.loops.reset(); this.inputChanged(); }
         const fresh = this.sim.events.slice(before);
         this.view.handleEvents(fresh, this.sim);
-        if (sound && this.cfg.mode === 'vision') this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
+        if (sound && this.cfg.mode === 'vision') this.sound.play(fresh, this.sim, this.camX, this.p.viewW);
       }
     }
     this.sim.step();
@@ -525,7 +525,7 @@ export class PlayScene {
       }
     }
     this.view.handleEvents(this.sim.events, this.sim);
-    if (sound && this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim.d.tick, this.camX, this.p.viewW);
+    if (sound && this.cfg.mode !== 'attract') this.sound.play(this.sim.events, this.sim, this.camX, this.p.viewW);
   }
 
   private pick(wx: number, wy: number, touch: boolean): number | null {
@@ -588,7 +588,7 @@ export class PlayScene {
       this.inputChanged();
       const fresh = this.sim.events.slice(before);
       this.view.handleEvents(fresh, this.sim);
-      this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
+      this.sound.play(fresh, this.sim, this.camX, this.p.viewW);
       this.hud?.flashSkill(this.armed);
       this.forgetFate();
       if (this.sim.d.skills[this.armed] <= 0) this.armed = null;

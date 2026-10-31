@@ -11,7 +11,8 @@
 import { Engine } from './engine';
 import type { AudioEngine } from './types';
 
-export type { SongId, StingerId, SfxId, SfxOpts, AudioEngine } from './types';
+export type { SongId, StingerId, SfxId, SfxOpts, AudioEngine, Volumes } from './types';
+export { barkPitch } from './barks';
 export { SONG_IDS, STINGER_IDS, SFX_IDS } from './types';
 
 const engine = new Engine();

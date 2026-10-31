@@ -14,6 +14,7 @@ import { compareFates, type Fate, type FateDelta, type FateEnd, type Ghost } fro
 import type { Sim } from '../sim/sim';
 import type { Hazard, SimEvent, Wyrd, WyrdState } from '../sim/state';
 import { isAlive } from '../sim/state';
+import { CueReader, type Cue } from './sound';
 
 export interface ViewInput {
   sim: Sim;
@@ -54,6 +55,48 @@ export interface MarkView {
 
 interface Popup { text: string; x: number; y: number; life: number; r: number; g: number; b: number }
 interface TempLight { x: number; y: number; r: number; c: [number, number, number]; life: number; max: number }
+
+// Personality. Each fate gets a short, bloodless, slightly comic beat, and a Wyrdling reaching the gate a
+// cheer. Beats and speech bubbles are timed in simulation ticks from their event, so they keep pace with
+// fast-forward, freeze with pause and run backwards under Rewind; one whose tick is still to come (the
+// run was rewound past it) is dropped, since that future may not happen again.
+type BeatKind = 'burn' | 'drown' | 'crush' | 'fall' | 'fling' | 'cheer';
+const BEAT_TICKS: Record<BeatKind, number> = { burn: 27, drown: 30, crush: 26, fall: 24, fling: 26, cheer: 16 };
+const BEAT_OF: Record<string, BeatKind> = {
+  lava: 'burn', fire: 'burn', sweep: 'burn', magma: 'burn', meteor: 'burn', fireball: 'burn',
+  water: 'drown',
+  crusher: 'crush', slam: 'crush', boulder: 'crush', buried: 'crush',
+  fall: 'fall', void: 'fall', spikes: 'fall',
+  burrow: 'fling', venom: 'fling', icicle: 'fling',
+};
+interface Beat {
+  kind: BeatKind;
+  tick: number;
+  x: number;
+  y: number;
+  /** which way a fling flies (or a cheer faces) */
+  dir: 1 | -1;
+  /** fell out of the level: only its thread is seen, rising from the bottom edge */
+  out?: boolean;
+  /** drowned: the water's extent [x0, x1], which the floating hood keeps to */
+  pool?: [number, number];
+}
+/** cheer, by ticks since the gate: [frame, hop] (then the golden exit) */
+const CHEER: [number, number][] = [[0, 0], [0, 0], [1, -2], [1, -4], [2, -5], [2, -5], [1, -3], [3, 0]];
+
+/** A bark's visible half: a speech bubble over the Wyrdling (the accessibility twin of each voice). The
+ *  'mm' of a granted calling has none: the calling's name rising over the Wyrdling already says it, and a
+ *  bubble there would cover that name. */
+type EmoteKind = 'hup' | 'oh' | 'whee' | 'yay';
+interface Emote { kind: EmoteKind; id: number; tick: number; x: number; y: number }
+const EMOTE_TICKS = 24;
+const EMOTE_OF: Partial<Record<string, EmoteKind>> = { spawn: 'hup', saved: 'yay', teeter: 'oh', glide: 'whee' };
+
+const DYING: ReadonlySet<WyrdState> = new Set(['unravel', 'burn', 'drown']);
+/** a doomed Wyrdling cowers when Foresight has it dying within this many ticks */
+const COWER_TICKS = 30;
+/** how long a fatal fall starts with arms windmilling */
+const FLAIL_TICKS = 12;
 
 function hexRgb(h: string): [number, number, number] {
   const c = new THREE.Color(h);
@@ -136,6 +179,14 @@ export class GameView {
   /** the last frame drew a sacrifice label ("1 lost · 3 saved later"), for the lesson that explains it */
   sacrifice = false;
   private atmoT = 0;
+  /** Wyrdling id → its death beat or gate cheer */
+  private beats = new Map<number, Beat>();
+  private emotes: Emote[] = [];
+  private cues = new CueReader();
+  /** Wyrdling id → tick its fatal fall began */
+  private teeter = new Map<number, number>();
+  /** Wyrdling id → [tick, x] when last seen tumbling: a fatal landing just after is a fling */
+  private tumbling = new Map<number, [number, number]>();
 
   constructor(p: Pipeline, art: ArtBundle, sim: Sim) {
     this.p = p;
@@ -258,6 +309,82 @@ export class GameView {
 
   handleEvents(events: SimEvent[], sim: Sim): void {
     for (const e of events) this.event(e, sim);
+    for (const c of this.cues.read(sim)) this.cue(c, sim);
+    for (const w of sim.d.wyrds) if (w.st === 'tumble') this.tumbling.set(w.id, [sim.d.tick, w.x]);
+  }
+
+  /** a speech bubble for Wyrdling `id` (one each; the oldest go first in a crowd) */
+  private emote(kind: EmoteKind, id: number, x: number, y: number, tick: number): void {
+    this.emotes = this.emotes.filter((m) => m.id !== id);
+    this.emotes.push({ kind, id, tick, x, y });
+    if (this.emotes.length > 8) this.emotes.shift();
+  }
+
+  private cue(c: Cue, sim: Sim): void {
+    const kind = EMOTE_OF[c.kind];
+    if (kind) this.emote(kind, c.id, c.x, c.y, sim.d.tick);
+    if (c.kind === 'teeter') this.teeter.set(c.id, sim.d.tick);
+    else if (c.kind === 'glide') this.burst(this.sparks, c.x, c.y - 10, 6, [0.55, 1, 0.7], 0.7, 18, 0);
+    else if (c.kind === 'climb') {
+      // grit scraped off the wall under the paws: the scrabble's visible half
+      const w = sim.d.wyrds[c.id];
+      const m = sim.terrain.get(c.x + w.dir * 2, c.y - 6) || 1;
+      const col = (this.debrisColors[m]?.[0] ?? [0.6, 0.5, 0.4]).map((v) => v + (1 - v) * 0.35);
+      for (let i = 0; i < 2; i++) this.debris.spawn(c.x + w.dir, c.y - 5 - i * 3, -w.dir * 0.3, 0.2, 30, col[0], col[1], col[2], 1, 1, 0.12, { collide: true });
+    }
+  }
+
+  /** The death beat for a cause, with its first particles. */
+  private deathBeat(e: SimEvent, sim: Sim): void {
+    const id = e.id ?? -1;
+    const w = sim.d.wyrds[id];
+    const tick = sim.d.tick;
+    const cause = e.s ?? '';
+    const flung = this.tumbling.get(id);
+    let kind = BEAT_OF[cause] ?? 'fall';
+    // thrown by a guardian and landing too hard: it bounces off in a tumble rather than unravelling where it lands
+    let dir: 1 | -1 = w?.dir ?? 1;
+    if (kind === 'fall' && flung && flung[0] < tick && tick - flung[0] <= 2) {
+      kind = 'fling';
+      dir = e.x < flung[1] ? -1 : e.x > flung[1] ? 1 : dir;
+    } else if (kind === 'fling') {
+      const b = sim.d.boss;
+      dir = b ? (e.x < b.x ? -1 : 1) : (-dir as 1 | -1);
+    }
+    let y = e.y, pool: [number, number] | undefined;
+    if (kind === 'drown' || cause === 'lava') {
+      // the liquid's surface, where the hood floats or the soot rises; the hood stays on the water
+      const l = sim.L.liquids.find((q) => e.x >= q.x && e.x < q.x + q.w && e.y >= q.y && e.y < q.y + q.h);
+      if (l) { y = l.y; pool = [l.x, l.x + l.w]; }
+    }
+    const out = cause === 'void';
+    this.beats.set(id, { kind, tick, x: e.x, y, dir, out, pool });
+    if (this.beats.size > 64) this.beats.delete(this.beats.keys().next().value!);
+    this.teeter.delete(id);
+    this.tumbling.delete(id);
+    if (out) return;
+    // dust in the ground's colour, paled so it shows against that ground
+    const g = this.debrisColors[sim.terrain.get(e.x, y + 1)]?.[0] ?? [0.6, 0.5, 0.4];
+    const dust = g.map((c) => c + (1 - c) * 0.45);
+    switch (kind) {
+      case 'burn':
+        for (let i = 0; i < 8; i++) this.sparks.spawn(e.x + (Math.random() - 0.5) * 8, y - 4 - Math.random() * 6, (Math.random() - 0.5) * 0.5, -0.4 - Math.random() * 0.6, 30 + Math.random() * 20, 1, 0.55, 0.2, 1, 1, -0.004, { drag: 0.97 });
+        break;
+      case 'drown':
+        for (let i = 0; i < 10; i++) this.debris.spawn(e.x + (Math.random() - 0.5) * 6, y - 1, (Math.random() - 0.5) * 1.6, -0.8 - Math.random() * 1.2, 22 + Math.random() * 10, 0.65, 0.88, 1, 1, 1, 0.12);
+        break;
+      case 'crush':
+      case 'fall':
+        // a dust puff, rolling out along the ground
+        for (let i = 0; i < 16; i++) {
+          const s = i % 2 ? 1 : -1;
+          this.debris.spawn(e.x + s * Math.random() * 3, y - 1 - Math.random() * 2, s * (0.4 + Math.random() * 0.9), -0.15 - Math.random() * 0.45, 22 + Math.random() * 14, dust[0], dust[1], dust[2], 0.9, Math.random() < 0.5 ? 2 : 1, 0.015, { drag: 0.94 });
+        }
+        break;
+      case 'fling':
+        this.burst(this.sparks, e.x, y - 6, 8, [1, 0.9, 0.6], 1.2, 16, 0);
+        break;
+    }
   }
 
   private burst(p: Particles, x: number, y: number, n: number, c: [number, number, number], speed: number, life: number, grav: number, size = 1, collide = false): void {
@@ -287,6 +414,8 @@ export class GameView {
 
   private event(e: SimEvent, sim: Sim): void {
     const GOLD: [number, number, number] = [1, 0.82, 0.35];
+    const emote = EMOTE_OF[e.type];
+    if (emote && e.id !== undefined) this.emote(emote, e.id, e.x, e.y, sim.d.tick);
     switch (e.type) {
       case 'spawn': this.burst(this.sparks, e.x, e.y - 4, 8, GOLD, 0.8, 30, 0); break;
       case 'assign': {
@@ -314,14 +443,10 @@ export class GameView {
         this.flash = [1, 0.85, 0.6, 0.22];
         break;
       }
-      case 'death': {
-        const cause = e.s ?? '';
-        const fire = cause === 'lava' || cause === 'fire' || cause === 'sweep' || cause === 'magma' || cause === 'meteor';
-        const c: [number, number, number] = fire ? [1, 0.5, 0.2] : cause === 'water' ? [0.6, 0.85, 1] : GOLD;
-        for (let i = 0; i < 12; i++) this.sparks.spawn(e.x + (Math.random() - 0.5) * 6, e.y - Math.random() * 10, (Math.random() - 0.5) * 0.5, -0.3 - Math.random() * 0.6, 50 + Math.random() * 30, c[0], c[1], c[2], 0.9, 1, -0.004, { drag: 0.98 });
-        break;
-      }
+      case 'death': this.deathBeat(e, sim); break;
       case 'saved': {
+        const w = e.id !== undefined ? sim.d.wyrds[e.id] : undefined;
+        if (w) this.beats.set(w.id, { kind: 'cheer', tick: sim.d.tick, x: e.x, y: w.y, dir: w.dir });
         this.burst(this.sparks, e.x, e.y - 8, 18, GOLD, 1.4, 35, 0.01);
         this.popup('+1', e.x, e.y - 30, [0.7, 1, 0.6]);
         this.tempLights.push({ x: e.x, y: e.y - 12, r: 40, c: [1, 0.9, 0.5], life: 20, max: 20 });
@@ -379,7 +504,9 @@ export class GameView {
     this.drawEntities(sim, time);
     this.drawBodies(sim);
     this.drawBoss(sim, time);
+    this.drawBeats(sim);
     this.drawWyrds(sim, inp);
+    this.drawEmotes(sim);
     this.drawHazards(sim, time);
     this.sacrifice = false;
     if (inp.showForesight && !inp.rewinding) this.drawForesight(sim, inp);
@@ -585,13 +712,44 @@ export class GameView {
     }
   }
 
+  /** Small life on top of the state's own animation: a doomed Wyrdling cowers, a fatal fall starts in a
+   *  flail, and a waiting one fidgets. Null: the plain animation. */
+  private reaction(w: Wyrd, tick: number, inp: ViewInput): { key: string; i: number; dx: number; dy: number; turn?: boolean } | null {
+    const g = tick + w.id * 3;
+    if (w.st === 'fall') {
+      const t0 = this.teeter.get(w.id);
+      return t0 !== undefined && tick - t0 >= 0 && tick - t0 < FLAIL_TICKS ? { key: 'wyrd.flail', i: (g >> 1) & 3, dx: 0, dy: 0 } : null;
+    }
+    if (w.st !== 'walk' && w.st !== 'wait') return null;
+    const fate = inp.fate, end = fate && !inp.rewinding ? fate.ends.get(w.id) : undefined;
+    if (fate && end?.kind === 'dead') {
+      const left = fate.from + end.t - tick;
+      if (left > 0 && left <= COWER_TICKS) return { key: 'wyrd.cower', i: (g >> 1) & 3, dx: 0, dy: 0 };
+    }
+    if (w.st !== 'wait') return null;
+    // A calm stand with a blink, then one small fidget, each Wyrdling on its own clock and with its own
+    // habits. Waits behind a Weaver come in short spells, so the clock runs on through the walking between.
+    const k = tick + w.id * 23, cycle = Math.floor(k / 64), p = k % 64;
+    if (p < 24) return { key: 'wyrd.idle', i: p === 10 || p === 11 ? 1 : 0, dx: 0, dy: 0 };
+    switch ((cycle * 7 + w.id * 3) % 5) {
+      case 0: return { key: 'wyrd.idle', i: 2, dx: 0, dy: 0 };
+      case 1: return { key: 'wyrd.idle', i: 3 + ((p >> 2) & 1), dx: 0, dy: 0 };
+      case 2: return { key: 'wyrd.idle', i: 5, dx: 0, dy: 0 };
+      case 3: return { key: 'wyrd.idle', i: p >= 52 && p < 54 ? 1 : 0, dx: 0, dy: 0, turn: p < 52 };
+      default: return { key: 'wyrd.idle', i: p < 58 ? 6 : 0, dx: 0, dy: 0 };
+    }
+  }
+
   private drawWyrds(sim: Sim, inp: ViewInput): void {
     const tick = sim.d.tick;
     for (const w of sim.d.wyrds) {
       if (w.st === 'gone') continue;
-      const an = this.wyrdAnim(w, tick);
+      // a death beat or a cheer at the gate draws this Wyrdling now
+      if ((DYING.has(w.st) || w.st === 'exit') && this.beats.has(w.id)) continue;
+      const re = this.reaction(w, tick, inp);
+      const an = re ?? this.wyrdAnim(w, tick);
       const hovered = inp.hover === w.id;
-      const o: SpriteOpts = { flip: w.dir < 0 };
+      const o: SpriteOpts = { flip: re?.turn ? w.dir > 0 : w.dir < 0 };
       if (hovered && isAlive(w)) {
         o.fr = 1; o.fg = 1; o.fb = 1; o.fa = 0.18 + 0.1 * Math.sin(inp.time * 10);
       }
@@ -618,6 +776,113 @@ export class GameView {
         // the tag names what a click would grant; a click that grants nothing gets no tag (the ring says why)
         if (inp.armed !== null && inp.canAssign) this.text(this.over, SKILL_INFO[inp.armed].name, w.x, w.y - 28, 0.95, 0.95, 0.85, 0.95);
       }
+    }
+  }
+
+  /** The death beats and gate cheers, by ticks since they began. */
+  private drawBeats(sim: Sim): void {
+    const tick = sim.d.tick, A = this.actors, W = this.atlas.white;
+    const dyed = (key: string) => (hoodSuffix && this.atlas.has(key + hoodSuffix) ? key + hoodSuffix : key);
+    const fadeFrom = (age: number, at: number, len: number) => (age < at ? 1 : Math.max(0, 1 - (age - at) / len));
+    for (const [id, b] of this.beats) {
+      const age = tick - b.tick;
+      if (age < 0) { this.beats.delete(id); continue; }
+      if (age >= BEAT_TICKS[b.kind]) continue;
+      const flip = b.dir < 0;
+      switch (b.kind) {
+        case 'cheer': {
+          // a hop with both arms up, then the golden fade into the gate. The hop is drawn unlit: in the
+          // gate's glare a lit teal hood melts into the teal portal behind it.
+          if (age < CHEER.length) {
+            const [i, dy] = CHEER[age];
+            this.over.push(this.f(dyed('wyrd.cheer'), i), b.x, b.y + dy, { flip });
+          } else A.push(this.f(dyed('wyrd.exit'), Math.min(7, age - CHEER.length + 1)), b.x, b.y, { flip });
+          break;
+        }
+        case 'burn': {
+          // catches, flares, and is a puff of soot that blinks twice before it drifts apart
+          if (age < 4) {
+            A.push(this.f(dyed('wyrd.burn'), Math.min(2, age)), b.x, b.y + 1, { flip });
+            this.light(b.x, b.y - 6, 34, 1.2, 0.5, 0.15, 1);
+            break;
+          }
+          const k = age - 4;
+          const frame = age >= 25 ? 3 : age >= 22 ? 2 : (k >= 8 && k < 10) || (k >= 14 && k < 16) ? 1 : 0;
+          // blown back off the flame, and drawn unlit: in a fire's glare a lit puff turns orange and loses its eyes
+          const x = b.x - b.dir * Math.min(7, k * 2) + Math.round(Math.sin(k * 0.45));
+          this.over.push(this.f('fx.soot', frame), x, b.y + 1 - Math.round(k * 0.3), { a: fadeFrom(age, 22, 6) });
+          if (k < 6) this.light(b.x, b.y - 4, 26, 1, 0.45, 0.15, 1 - k / 6);
+          break;
+        }
+        case 'drown': {
+          // goes under; the empty hood bobs up and floats a moment, then sinks with a bubble or two
+          if (age < 6) { A.push(this.f(dyed('wyrd.drown'), age), b.x, b.y + 2, { flip }); break; }
+          const k = age - 6, sink = Math.max(0, age - 24);
+          // drifting a little, but never off the water (a pool narrower than the hood holds it mid-pool)
+          const [p0, p1] = b.pool ?? [b.x - 99, b.x + 99];
+          const x = p1 - p0 >= 16 ? Math.max(p0 + 7, Math.min(p1 - 8, b.x + b.dir * Math.round(k * 0.15))) : Math.round((p0 + p1) / 2);
+          const bob = Math.round(Math.sin(k * 0.6) * 0.8);
+          A.push(this.f(dyed('wyrd.hood'), (k >> 3) & 1), x, b.y + 1 + bob + Math.round(sink * 0.8), {
+            flip, a: fadeFrom(age, 24, 6), r: sink ? 0.7 : 1, g: sink ? 0.85 : 1,
+          });
+          // rings spreading on the surface
+          if (k < 14) {
+            for (const s of [-1, 1]) {
+              const rx = x + s * (5 + (k >> 1)) - (s < 0 ? 1 : 0);
+              if (rx >= p0 && rx + 2 <= p1) A.rect(W, rx, b.y, 2, 1, 0.8, 0.95, 1, 0.8 * (1 - k / 14));
+            }
+          }
+          if (sink) for (let i = 0; i < 2; i++) A.rect(W, x - 1 + i * 3, b.y - 2 - ((sink + i * 2) % 5), 1, 1, 0.85, 0.97, 1, 0.9);
+          break;
+        }
+        case 'crush': {
+          // flattened, dazed (two motes circling), then it pops back up as a loose thread
+          if (age < 12) {
+            A.push(this.f(dyed('wyrd.flat'), (age >> 2) & 1), b.x, b.y, { flip });
+            for (const ph of [0, Math.PI]) {
+              const t = age * 0.55 + ph;
+              A.rect(W, Math.round(b.x + Math.cos(t) * 5), Math.round(b.y - 6 + Math.sin(t) * 1.5), 1, 1, 1, 0.95, 0.6, 1);
+            }
+            break;
+          }
+          const k = age - 12;
+          if (k < 3) A.push(this.f('fx.pop', k), b.x, b.y - 3);
+          A.push(this.f('fx.thread', (age >> 1) & 3), b.x, b.y - 1 - Math.round(k * 1.1), { a: fadeFrom(age, 20, 6) });
+          this.light(b.x, b.y - 8 - k, 22, 1, 0.8, 0.4, 0.7);
+          break;
+        }
+        case 'fall': {
+          // a fall out of the level shows only its thread, rising from the bottom edge
+          if (b.out) {
+            A.push(this.f('fx.thread', (age >> 1) & 3), b.x, sim.L.h - 1 - Math.round(age * 1.2), { a: fadeFrom(age, 16, 8) });
+            break;
+          }
+          // squashed by the landing, then the thread comes undone
+          if (age < 3) { A.push(this.f(dyed('wyrd.land'), 0), b.x, b.y, { flip }); break; }
+          A.push(this.f(dyed('wyrd.unravel'), Math.min(11, 1 + Math.floor(((age - 3) * 11) / 21))), b.x, b.y, { flip });
+          break;
+        }
+        case 'fling': {
+          // sent tumbling off in an arc, and gone with a pop
+          const t = Math.min(age, 20);
+          const x = Math.round(b.x + b.dir * 1.5 * t), y = Math.round(b.y - 4 - 3.2 * t + 0.11 * t * t);
+          if (age < 20) A.push(this.f(dyed('wyrd.tumble'), (age >> 1) & 3), x, y, { flip });
+          else A.push(this.f('fx.pop', Math.min(2, (age - 20) >> 1)), x, y - 6);
+          break;
+        }
+      }
+    }
+  }
+
+  /** Speech bubbles over the Wyrdlings that spoke (they follow a living one). */
+  private drawEmotes(sim: Sim): void {
+    const tick = sim.d.tick;
+    this.emotes = this.emotes.filter((m) => tick >= m.tick && tick - m.tick < EMOTE_TICKS);
+    for (const m of this.emotes) {
+      const w = sim.d.wyrds[m.id];
+      if (w && isAlive(w)) { m.x = w.x; m.y = w.y; }
+      const age = tick - m.tick;
+      this.over.push(this.f(`emote.${m.kind}`), m.x + 3, m.y - 15 + Math.max(0, 2 - age), { a: Math.min(1, (EMOTE_TICKS - age) / 6) });
     }
   }
 

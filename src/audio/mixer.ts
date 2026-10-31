@@ -5,11 +5,12 @@
 //               ─dly─▶ delay ───┘                                                                     │
 //  stinger players ─dry─▶ jingleIn ──────────────────────────────────────────────────▶ musicVol      ├─▶ master ─▶ limiter ─▶ clip ─▶ out
 //  sfx voices ─▶ sfxIn ─▶ sfxVol ────────────────────────────────────────────────────────────────────┤
-//             ─▶ sfxVerb ─▶ sfxVol                                                                  ┘
+//             ─▶ sfxVerb ─▶ sfxVol                                                                  │
+//  barks ─▶ voiceIn ─▶ voiceVol ─────────────────────────────────────────────────────────────────────┘
 //  bend: ConstantSource (+ wobble LFO) connected into every music note's detune (rewind tape bend)
 
 /** Default live levels (the engine starts here; offline renders use the same). */
-export const DEFAULT_VOLS = { master: 0.9, music: 0.8, sfx: 1 };
+export const DEFAULT_VOLS = { master: 0.9, music: 0.8, sfx: 1, voice: 1 };
 export const MUSIC_TRIM = 0.85;
 
 export interface Mixer {
@@ -27,6 +28,8 @@ export interface Mixer {
   pauseGain: GainNode;
   musicVol: GainNode;
   sfxVol: GainNode;
+  voiceIn: GainNode;
+  voiceVol: GainNode;
   master: GainNode;
   bend: ConstantSourceNode;
   wobble: OscillatorNode;
@@ -134,6 +137,9 @@ export function buildMixer(ctx: BaseAudioContext, opts: { safetyClip?: boolean }
   const master = g(DEFAULT_VOLS.master);
   musicVol.connect(master);
   sfxVol.connect(master);
+  const voiceIn = g(1);
+  const voiceVol = g(DEFAULT_VOLS.voice);
+  voiceIn.connect(voiceVol).connect(master);
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -6;
   limiter.knee.value = 3;
@@ -158,7 +164,7 @@ export function buildMixer(ctx: BaseAudioContext, opts: { safetyClip?: boolean }
   bend.start();
   wobble.start();
 
-  return { ctx, musicIn, reverbIn, delayIn, delay, delayFb: fb, jingleIn, sfxIn, sfxRevIn, hp, lp, pauseGain, musicVol, sfxVol, master, bend, wobble, wobbleGain, limiter };
+  return { ctx, musicIn, reverbIn, delayIn, delay, delayFb: fb, jingleIn, sfxIn, sfxRevIn, hp, lp, pauseGain, musicVol, sfxVol, voiceIn, voiceVol, master, bend, wobble, wobbleGain, limiter };
 }
 
 export function setDelayForSong(m: Mixer, seconds: number, feedback: number, at: number) {

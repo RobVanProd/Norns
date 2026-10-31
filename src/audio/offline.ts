@@ -104,7 +104,7 @@ export async function renderSfxOffline(id: SfxId, opts: RenderOpts & { pitch?: n
   src.playbackRate.value = pitch;
   const g = ctx.createGain();
   g.gain.value = def.gain;
-  src.connect(g).connect(m.sfxIn);
+  src.connect(g).connect(def.bus === 'voice' ? m.voiceIn : m.sfxIn);
   if (def.rev) { const s = ctx.createGain(); s.gain.value = def.rev; g.connect(s).connect(m.sfxRevIn); }
   src.start(0.01);
   return ctx.startRendering();
