@@ -100,12 +100,12 @@ export interface BossState {
   hurt: number;
   /** index of the active Seiðr stone (-1 none) */
   stone: number;
+  /** how many stones have lit so far: the position in the fixed stone order of the next one to light */
+  ring: number;
   /** stone cooldown after firing */
   stoneCd: number;
   /** defeat animation timer (0 = alive) */
   dying: number;
-  /** free-form numeric memory for the specific boss (positions, targets) */
-  m: number[];
 }
 
 export interface SimEvent {

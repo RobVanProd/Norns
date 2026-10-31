@@ -386,7 +386,7 @@ describe('loop proof foundations', () => {
         sol.apply(sim);
         sim.step();
         const d = sim.d;
-        const score = [d.projectiles, d.hazards, d.charges, d.bodies, d.sandActive, d.boss?.m ?? []].filter((a) => a.length).length +
+        const score = [d.projectiles, d.hazards, d.charges, d.bodies, d.sandActive].filter((a) => a.length).length +
           (d.wyrds.some((w) => !UNTIMED.has(w.st)) ? 1 : 0);
         if (score > best) {
           best = score;
@@ -457,7 +457,7 @@ describe('loop proof foundations', () => {
     }
     // a field added to SimData is picked up by the generic walk; this only checks the snapshots reach it
     for (const k of Object.keys(snaps[0])) expect([...covered].some((c) => c === k || c.startsWith(k + '.')), k).toBe(true);
-    for (const k of ['boss.m', 'projectiles.[].tx', 'hazards.[].p', 'charges.[].fuse', 'bodies.[].sleep', 'wyrds.[].frozen']) expect(covered.has(k), k).toBe(true);
+    for (const k of ['boss.ring', 'projectiles.[].tx', 'hazards.[].p', 'charges.[].fuse', 'bodies.[].sleep', 'wyrds.[].frozen']) expect(covered.has(k), k).toBe(true);
     expect(leaves).toBeGreaterThan(500);
   });
 
@@ -554,7 +554,6 @@ describe('loop proof foundations', () => {
     expect(found).toEqual([
       // boss.ts: only while a guardian stands, or its missiles and hazards are about
       'boss.ts: for (const w of sim.d.wyrds) {',
-      "boss.ts: return sim.d.wyrds.filter((w) => isAlive(w) && w.x >= def.arena.x0 && w.x <= def.arena.x1 && w.st !== 'frozen');",
       'boss.ts: for (const w of sim.d.wyrds) {',
       'boss.ts: for (const w of sim.d.wyrds) {',
       'boss.ts: for (const w of sim.d.wyrds) if (isAlive(w) && Math.abs(w.x - x) <= 2 && y <= w.y && y >= w.y - 10) return true;',

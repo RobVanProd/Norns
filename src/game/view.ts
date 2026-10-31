@@ -8,7 +8,7 @@ import { Background, LiquidLayer, Particles, canvasTex } from '../render/layers'
 import type { Pipeline } from '../render/pipeline';
 import { SpriteBatch, type SpriteOpts } from '../render/spriteBatch';
 import { TerrainLayer } from '../render/terrainLayer';
-import { bossCore, bossPhase, magmaLevel, surfaceY } from '../sim/boss';
+import { SLAM_CRUSH, STONE_COOLDOWN, bossCore, bossPhase, magmaLevel, nextAttack, nextStone, surfaceY } from '../sim/boss';
 import { SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
 import { compareFates, type Fate, type FateDelta, type FateEnd, type Ghost } from '../sim/foresight';
 import type { Sim } from '../sim/sim';
@@ -489,8 +489,9 @@ export class GameView {
       this.light(L.spindle.x, L.spindle.y - 6, 40, 1, 0.85, 0.4, 0.9);
       if (Math.random() < 0.15) this.sparks.spawn(L.spindle.x + (Math.random() - 0.5) * 10, L.spindle.y - 6 + (Math.random() - 0.5) * 10, 0, -0.2, 30, 1, 0.9, 0.4, 1, 1, 0);
     }
-    // seidr stones
+    // seidr stones: the lit one, and the one that lights next (the order is fixed, so it is shown in advance)
     const boss = sim.d.boss;
+    const next = boss && L.def.boss ? nextStone(boss, L.def.boss, L.seidr.length) : -1;
     L.seidr.forEach((s, i) => {
       const on = boss && boss.hp > 0 && boss.stone === i;
       E.push(this.f(on ? 'seidr.on' : 'seidr.off', Math.floor(time * 8)), s.x, s.y + 1);
@@ -499,6 +500,13 @@ export class GameView {
         if (Math.random() < 0.4) this.sparks.spawn(s.x + (Math.random() - 0.5) * 14, s.y - 2, 0, -0.5 - Math.random() * 0.5, 40, 0.4, 1, 0.95, 1, 1, 0);
         // a pulsing guide arrow above the active stone
         this.text(this.over, 'v', s.x, s.y - 24 + Math.round(Math.sin(time * 5) * 2), 0.5, 1, 0.95, 1);
+      } else if (i === next) {
+        // the next stone: a soft glow and a NEXT marker, brightening as it is about to light
+        const soon = boss!.stone < 0 ? Math.max(0, 1 - boss!.stoneCd / STONE_COOLDOWN) : 0;
+        const k = 0.75 + 0.15 * soon + 0.1 * Math.sin(time * 3);
+        this.light(s.x, s.y - 6, 40, 0.3, 0.8, 0.85, 0.5 + 0.4 * soon);
+        this.text(this.over, 'NEXT', s.x, s.y - 30, 0.55, 0.9, 0.9, k);
+        this.text(this.over, 'v', s.x, s.y - 22, 0.55, 0.9, 0.9, k);
       }
     });
     // rune charges
@@ -688,6 +696,33 @@ export class GameView {
       this.over.push(this.f('target', Math.floor(time * 10)), p.tx, p.ty - 3, { r: 1, g: 0.25, b: 0.2, a: 0.55 + 0.45 * blink });
     }
     for (const h of sim.d.hazards) this.drawHazard(sim, h, time, blink, W);
+    this.drawNextAttack(sim, time, W);
+  }
+
+  /** The attack rotation and its aims are fixed, so the next strike is marked faintly up to 5 s before its
+   *  own telegraph starts: its name over the ground it will reach. */
+  private drawNextAttack(sim: Sim, time: number, W: FrameRef): void {
+    const b = sim.d.boss, def = sim.L.def.boss;
+    const n = b && def ? nextAttack(b, def) : null;
+    if (!n || n.in > 150) return;
+    const a = (0.35 + 0.45 * (1 - n.in / 150)) * (0.8 + 0.2 * Math.sin(time * 4));
+    const ar = def!.arena, phase = bossPhase(b!);
+    let x0 = n.x, x1 = n.x;
+    switch (n.act) {
+      case 'venom': x0 -= phase ? 35 : 22; x1 += phase ? 35 : 22; break;
+      case 'burrow': x0 -= 11; x1 += 11; break;
+      case 'lash': x1 = ar.x1; if (!def!.aim?.lash?.length) x0 = ar.x0; break;
+      case 'icicles': x0 -= phase ? 55 : 43; x1 += phase ? 55 : 43; break;
+      case 'breath': x0 -= phase === 2 ? 55 : 40; x1 += phase === 2 ? 55 : 40; break;
+      case 'slam': x0 -= SLAM_CRUSH; x1 += SLAM_CRUSH; break;
+      case 'sweep': x0 = Math.max(ar.x0, Math.min(ar.x1 - 180, n.x - 90)); x1 = x0 + 180; break;
+      case 'magma': x0 = ar.x0; x1 = ar.x1; break;
+      case 'meteors': x0 -= phase ? 39 : 24; x1 += phase ? 39 : 24; break;
+    }
+    const y = n.act === 'magma' || n.act === 'lash' || n.act === 'sweep' ? ar.floorY : surfaceY(sim, Math.round(n.x), ar.floorY - 140);
+    for (let x = x0; x < x1; x += 6) this.over.rect(W, x, y + 1, 3, 1, 1, 0.3, 0.25, a);
+    // under the line, clear of the stone markers above the ground
+    this.text(this.over, n.act.toUpperCase(), (x0 + x1) / 2, y + 4, 1, 0.45, 0.35, a);
   }
 
   private drawHazard(sim: Sim, h: Hazard, time: number, blink: number, W: FrameRef): void {
@@ -763,13 +798,16 @@ export class GameView {
         };
         if (warn) {
           const k = h.t / h.warn;
-          const r = 12 + (1 - k) * 10;
+          const r = SLAM_CRUSH + (1 - k) * 8;
+          // the ground the fist will crush
+          O.rect(W, h.x0 - SLAM_CRUSH, h.y0 - 16, SLAM_CRUSH * 2 + 1, 18, ...red(0.1 + 0.2 * blink * k));
           O.push(this.f('target', Math.floor(time * 12)), h.x0, h.y0 - 3, { r: 1, g: 0.3, b: 0.25, sx: r / 7, sy: r / 14, smooth: true });
           arm(hidden + (h.y0 - hidden) * k * k - 2 * (1 - k));
           if (h.t < 6 && Math.random() < 0.6) this.matDebris(sim, h.x0 + (Math.random() - 0.5) * 20, ceil + 2, 2, 1);
         } else {
           const k = h.t - h.warn;
-          if (k < 22) { const e = Math.max(0, (k - 8) / 14); arm(h.y0 + (hidden - h.y0) * e * e); }
+          // (the fallen giant's last quake has no fist)
+          if (k < 22 && h.warn > 0) { const e = Math.max(0, (k - 8) / 14); arm(h.y0 + (hidden - h.y0) * e * e); }
           for (const s of [-1, 1]) {
             const x = h.x0 + s * h.p;
             if (k < h.dur) for (let i = 0; i < 3; i++) this.sparks.spawn(x, h.y0 - Math.random() * 6, s * 0.3, -0.5 - Math.random(), 16, 0.8, 0.95, 1, 0.9, 1, 0.05);

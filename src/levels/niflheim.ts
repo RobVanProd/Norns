@@ -187,41 +187,59 @@ export const N4: LevelDef = {
 
 export const N5: LevelDef = {
   id: 'n5', name: 'Hrímgrímnir', realm: 'niflheim', music: 'boss',
-  intro: 'The Frost Jötunn guards the mist. His breath freezes, his fists shake the ice, his icicles rain down.',
+  intro: 'The Frost Jötunn guards the mist. His icicles rain, his breath freezes, and his fist pounds the yard before the Root Gate.',
+  idea: 'Hold the crowd back until the fist has fallen.',
   hints: [
-    'Frozen Wyrdlings thaw in time — until then others bump into them like ice.',
-    'Climbers cross the ice pillar every lap — and its stone with it.',
-    'When the fist rises, scatter: a slam crushes everyone huddled beneath it.',
+    'The stones light in a fixed order. NEXT marks the one after the glowing stone. A Leaper clears the rune-iron fence.',
+    'Everyone in the yard when the fist falls is crushed. A Warden holds the crowd back, and the quake shakes it loose.',
+    'The stone on the step by the Jötunn needs a Climber.',
   ],
   width: 600, height: 320, seed: 65,
   wyrdlings: 20, quota: 10, target: 15, rate: 30,
-  skills: { climber: 4, leaper: 3, warden: 2, glider: 2, miner: 1 },
+  skills: { climber: 2, leaper: 3, warden: 2, glider: 2, miner: 1 },
   ambient: [0.62, 0.7, 0.9],
   terrain: [
     { op: 'rect', mat: 'Rock', x: 0, y: 260, w: 600, h: 60, rough: 2 },
-    { op: 'rect', mat: 'Ice', x: 0, y: 258, w: 520, h: 6, rough: 1 },
-    { op: 'rect', mat: 'Ice', x: 200, y: 242, w: 50, h: 18, rough: 1 },
-    { op: 'rect', mat: 'Ice', x: 340, y: 214, w: 32, h: 46, rough: 0.5 },
-    { op: 'rect', mat: 'Iron', x: 520, y: 0, w: 16, h: 262 },
+    { op: 'rect', mat: 'Ice', x: 0, y: 258, w: 380, h: 6, rough: 1 },
+    // the pocket: a stone behind a rune-iron fence, too tall to walk up from outside, a step from within
+    { op: 'rect', mat: 'Ice', x: 0, y: 252, w: 40, h: 8 },
+    { op: 'rect', mat: 'Iron', x: 40, y: 247, w: 6, h: 12 },
+    // a step down to the fore-yard: whoever walks down it stays near the gate
+    { op: 'rect', mat: 'Air', x: 380, y: 258, w: 80, h: 10 },
+    { op: 'rect', mat: 'Ice', x: 380, y: 268, w: 80, h: 4, rough: 0.5 },
+    { op: 'rect', mat: 'Iron', x: 376, y: 258, w: 4, h: 11 },
+    // the yard before the Root Gate, where the fist falls
+    { op: 'rect', mat: 'Air', x: 460, y: 258, w: 60, h: 28 },
+    // a rock step by the Jötunn: its stone needs a Climber
+    { op: 'rect', mat: 'Rock', x: 500, y: 266, w: 20, h: 22, rough: 0.5 },
+    { op: 'rect', mat: 'Iron', x: 520, y: 0, w: 16, h: 288 },
     { op: 'ceiling', mat: 'Ice', pts: [[0, 50], [160, 40], [320, 58], [460, 44], [600, 60]], rough: 6, grain: 16 },
   ],
   entities: [
-    { type: 'entrance', x: 80, y: 190 },
-    { type: 'exit', x: 26, y: 257 },
-    { type: 'seidr', x: 120, y: 257 },
-    { type: 'seidr', x: 225, y: 241 },
-    { type: 'seidr', x: 356, y: 213 },
-    { type: 'decor', sprite: 'crystal', x: 60, y: 257 },
+    { type: 'entrance', x: 110, y: 190, dir: -1 },
+    { type: 'exit', x: 490, y: 285 },
+    { type: 'seidr', x: 230, y: 257 },
+    { type: 'seidr', x: 20, y: 251 },
+    { type: 'seidr', x: 510, y: 265 },
+    { type: 'seidr', x: 469, y: 285 },
+    { type: 'decor', sprite: 'crystal', x: 70, y: 257 },
     { type: 'decor', sprite: 'brazier', x: 300, y: 257 },
-    { type: 'decor', sprite: 'crystal', x: 440, y: 257 },
-    { type: 'decor', sprite: 'brazier', x: 500, y: 257 },
+    { type: 'decor', sprite: 'crystal', x: 420, y: 267 },
   ],
-  boss: { kind: 'jotunn', x: 566, y: 300, hp: 6, delay: 160, arena: { x0: 12, x1: 512, floorY: 257 } },
+  boss: {
+    kind: 'jotunn', x: 566, y: 300, hp: 5, delay: 160, arena: { x0: 12, x1: 512, floorY: 257 },
+    // the shelf stone (free once), the pocket, the step, then the yard stone twice: the crowd's to strike
+    stones: [0, 1, 2, 3, 3],
+    // ice and frost on the shelf; the fist always falls on the yard, the third attack of the round
+    aim: { icicles: [300, 160], breath: [230, 330], slam: [480] },
+  },
   solution: [
-    { nth: 0, skill: 'climber', purpose: ['quota', 'target', 'boss'] },
-    // a slam shockwave tosses one Wyrdling into the gully behind the ledge: leap it back out, or it
-    // wanders there forever and the level never ends by itself
-    { nth: 10, t: 1000, x: 268, dir: -1, skill: 'leaper', purpose: ['finish'] },
+    // the leader goes first into the yard and up the step to its stone
+    { nth: 0, skill: 'climber', purpose: ['boss'] },
+    // one of the crowd walking back to the fence leaps it into the pocket, where its stone lights next
+    { nth: 8, x: 64, dir: -1, skill: 'leaper', purpose: ['boss'] },
+    // the next behind the leader holds the crowd in the fore-yard until the fist has fallen on an empty yard
+    { nth: 1, x: 445, dir: 1, skill: 'warden', purpose: ['target'] },
   ],
 };
 
