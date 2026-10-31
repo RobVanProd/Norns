@@ -61,7 +61,8 @@ src/sim/        deterministic simulation. No DOM, no imports from outside src/si
   sand.ts         falling-sand CA over active chunks
   boss.ts         boss patterns, projectiles, hazards (wyrm / jotunn / herald)
   foresight.ts    ForesightJob: time-sliced clone-ahead prediction (Fate); VerdictJob: a branch run to its end
-  settle.ts       settled(), LoopDetector: proves "nothing more will happen unless you act"
+  settle.ts       settled(), LoopDetector: proves "nothing more will happen unless you act" (whole-state
+                  loops, and groups of Wyrdlings that repeat apart on their own periods)
   weave.ts        the Weave: a versioned, encodable replay of one attempt (WeaveRecorder, Replayer)
   timeline.ts     rewind ring buffer of clones
   solution.ts     SolutionPlayer: replays a level's scripted SolutionStep[]
@@ -96,10 +97,13 @@ Data flow per frame (`PlayScene.update` then `render`):
    (`+ - * /`, `Math.sqrt`, integer ops, `Math.floor`/`round`/`abs`/`min`/`max`).
    - Never use `Math.random`, `Math.sin`/`cos`/`pow`/`exp`, `Date`, or anything from the DOM.
      Use `sim.rand()` and `dsin`/`dcos` from `rng.ts` instead.
-   - The one exception is `performance.now()` in `ForesightJob.advance`. It decides only how much
-     work runs per frame, never what the result is.
-   - Foresight's promise ("this Wyrdling dies") is only true while this holds. A test checks
-     predicted deaths against actual ones.
+   - The one exception is `performance.now()` in `ForesightJob.advance` and `VerdictJob.advance`.
+     It decides only how much work runs per frame, never what the result is.
+   - Foresight's promise ("this Wyrdling dies") and the verdict's are only true while this holds.
+     Tests check predicted deaths and verdicts against actual runs.
+   - The loop proof (`LoopDetector`) relies on knowing everything the step reads. A new tick-driven
+     rule needs a look at `tickPeriods`; a new way for Wyrdlings to notice each other (or for the world
+     to notice a walker) needs a look at `PASSIVE`, `SEEN` and the zones in settle.ts.
 2. **State must clone.** `SimData` is plain data cloned with `structuredClone` (no classes,
    functions or Maps).
    - Terrain is shared copy-on-write between clones. Write through `terrain.set()` or

@@ -265,6 +265,7 @@ export class Hud {
       this.verdictEl.replaceChildren(...parts);
     }
     this.root.classList.toggle('paused', s.paused);
+    this.root.classList.toggle('verdict-on', v !== null);
     this.root.classList.toggle('boss', !!s.boss);
   }
 

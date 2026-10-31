@@ -193,9 +193,10 @@ export function bestWeave(s: SaveData, def: LevelDef): (BestWeave & { w: Weave }
   return b && w && !isStale(w, def) ? { ...b, w } : null;
 }
 
-/** Keep a finished run if it beats the stored best (or the stored one went stale). True if kept; the
- *  caller writes the save. */
+/** Keep a finished run if it beats the stored best (or the stored one went stale). A run that saved
+ *  nobody is never worth watching. True if kept; the caller writes the save. */
 export function offerWeave(s: SaveData, def: LevelDef, w: Weave, run: { saved: number; ticks: number }): boolean {
+  if (run.saved <= 0) return false;
   const cand = { saved: run.saved, used: w.entries.length, ticks: run.ticks };
   const old = bestWeave(s, def);
   if (old && !better(cand, old)) return false;

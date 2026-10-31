@@ -37,10 +37,11 @@ describe('best Weave', () => {
   it('keeps the run that saved most, then used fewer callings, then took fewer ticks', () => {
     const s = loadSave();
     const full = play();
-    const cut = play(400);
-    expect(offerWeave(s, m1, cut.weave, { saved: cut.sim.d.saved, ticks: 400 })).toBe(true);
+    const cut = play(600);
+    expect(cut.sim.d.saved).toBeGreaterThan(0);
+    expect(offerWeave(s, m1, cut.weave, { saved: cut.sim.d.saved, ticks: 600 })).toBe(true);
     expect(offerWeave(s, m1, full.weave, { saved: full.sim.d.saved, ticks: full.sim.d.tick })).toBe(true);
-    expect(offerWeave(s, m1, cut.weave, { saved: cut.sim.d.saved, ticks: 400 })).toBe(false);
+    expect(offerWeave(s, m1, cut.weave, { saved: cut.sim.d.saved, ticks: 600 })).toBe(false);
     // same saves and callings: only a faster run replaces it
     expect(offerWeave(s, m1, full.weave, { saved: full.sim.d.saved, ticks: full.sim.d.tick + 1 })).toBe(false);
     expect(offerWeave(s, m1, full.weave, { saved: full.sim.d.saved, ticks: full.sim.d.tick - 1 })).toBe(true);
@@ -58,10 +59,15 @@ describe('best Weave', () => {
     expect(bestWeave(s, { ...m1, intro: 'other words', idea: 'one idea' })).not.toBeNull();
     const moved: LevelDef = { ...m1, entities: m1.entities.map((e) => (e.type === 'exit' ? { ...e, x: e.x + 1 } : e)) };
     expect(bestWeave(s, moved)).toBeNull();
-    // a worse run on the new shape still beats a stale best
+    // a run that saved nobody is never kept; any other run on the new shape beats the stale best
     const cut = play(100, moved);
-    expect(offerWeave(s, moved, cut.weave, { saved: 0, ticks: 100 })).toBe(true);
-    expect(bestWeave(s, moved)!.saved).toBe(0);
+    expect(offerWeave(s, moved, cut.weave, { saved: 0, ticks: 100 })).toBe(false);
+    expect(bestWeave(s, moved)).toBeNull();
+    const worse = play(600, moved);
+    expect(worse.sim.d.saved).toBeGreaterThan(0);
+    expect(worse.sim.d.saved).toBeLessThan(full.sim.d.saved);
+    expect(offerWeave(s, moved, worse.weave, { saved: worse.sim.d.saved, ticks: 600 })).toBe(true);
+    expect(bestWeave(s, moved)!.saved).toBe(worse.sim.d.saved);
   });
 });
 
@@ -89,20 +95,24 @@ describe('playtest log', () => {
     logFinish(st, 'm1', log, true, full.weave);
     const back = loadStats().levels.m1;
     expect(back).toMatchObject({ attempts: 2, restarts: 1, finishes: 1, clears: 1, clearSec: 42, clearAttempts: 2, callings: 1 });
-    expect(back.quits).toEqual([{ tick: 300, saved: 0, used: 0, via: 'restart' }]);
+    expect(back.quits).toMatchObject([{ tick: 300, saved: 0, used: 0, via: 'restart' }]);
 
     const report = JSON.parse(playtestReport(loadStats(), ALL_LEVELS, { m1: 7 }, { w: 1280, h: 720, touch: false }));
     expect(report.levels.m1.stars).toBe(7);
-    const weaves = (report.levels.m1.weaves as string[]).map((t) => decodeWeave(t)!);
-    expect(weaves.length).toBe(2);
-    for (const w of weaves) {
+    // the finished attempt replays to its end; the one left at tick 300 replays to there and stops
+    const finished = (report.levels.m1.weaves as string[]).map((t) => decodeWeave(t)!);
+    const quit = decodeWeave(report.levels.m1.quits[0].weave)!;
+    expect(finished.length).toBe(1);
+    expect(quit.cut).toBe(300);
+    for (const [w, ticks] of [[finished[0], full.sim.d.tick], [quit, 300]] as const) {
       expect(w.level).toBe('m1');
       const sim = Sim.create(m1);
       const r = new Replayer(w);
       while (!sim.d.finished) { r.apply(sim); sim.step(); }
       expect(r.desync).toBeNull();
+      expect(sim.d.tick).toBe(ticks);
     }
-    expect(weaves[1].entries.length).toBe(1);
+    expect(quit.entries.length).toBe(1);
 
     eraseStats();
     expect(loadStats().levels).toEqual({});

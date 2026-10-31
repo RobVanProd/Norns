@@ -599,18 +599,22 @@ export class Game {
       if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => show('Copied'), () => show('Select and copy below'));
       else show('Select and copy below');
     });
+    // two columns side by side on short (landscape phone) screens, one under the other elsewhere
     this.openModal(el('div', { class: 'panel modal settings' },
       el('h2', { text: 'Settings' }),
-      slider('Music', s.music, (v) => { s.music = v; audio.setVolumes({ music: v }); }),
-      slider('Sound', s.sfx, (v) => { s.sfx = v; audio.setVolumes({ sfx: v }); audio.sfx('ui_click'); }),
-      toggle('Tutorial hints', s.hints, (v) => { s.hints = v; }),
-      el('label', { class: 'set' }, el('span', { text: 'Pixel zoom' }), zoom),
-      el('label', { class: 'set', title: 'Hold: rewind while R or the rewind button is held. Toggle: press once to start, again to stop.' },
-        el('span', { text: 'Rewind' }), rewind),
-      el('h3', { text: 'Assists' }),
-      toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
-      toggle('Verdict', s.verdict, (v) => { s.verdict = v; if (this.scene) this.scene.cfg.verdict = v; },
-        'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'),
+      el('div', { class: 'cols' },
+        el('div', {},
+          slider('Music', s.music, (v) => { s.music = v; audio.setVolumes({ music: v }); }),
+          slider('Sound', s.sfx, (v) => { s.sfx = v; audio.setVolumes({ sfx: v }); audio.sfx('ui_click'); }),
+          toggle('Tutorial hints', s.hints, (v) => { s.hints = v; }),
+          el('label', { class: 'set' }, el('span', { text: 'Pixel zoom' }), zoom),
+          el('label', { class: 'set', title: 'Hold: rewind while R or the rewind button is held. Toggle: press once to start, again to stop.' },
+            el('span', { text: 'Rewind' }), rewind)),
+        el('div', {},
+          el('h3', { text: 'Assists' }),
+          toggle("Skuld's Foresight", s.foresight, (v) => { s.foresight = v; if (this.scene) this.scene.cfg.foresight = v; }),
+          toggle('Verdict', s.verdict, (v) => { s.verdict = v; if (this.scene) this.scene.cfg.verdict = v; },
+            'While paused with a calling armed: what the hovered Wyrdling\'s calling comes to if you do nothing more'))),
       el('div', { class: 'row' }, fs, copy, reset),
       copied,
       el('div', { class: 'row' }, done)), close);

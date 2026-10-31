@@ -339,6 +339,8 @@ export class PlayScene {
     this.log?.rewound(this.sim.d.tick - prev.d.tick, this.time);
     this.sim = prev;
     this.recorder?.rewind(prev.d.tick);
+    // back before the first calling: previews count again, as before any calling
+    if (this.log && this.recorder && !this.recorder.weave.entries.length) this.log.granted = false;
     this.loops.reset();
     this.inputChanged();
   }
@@ -533,16 +535,24 @@ export class PlayScene {
     this.rewindFx += ((this.rewinding ? 1 : 0) - this.rewindFx) * Math.min(1, dt * 10);
     if (this.log && this.state === 'play') this.log.sec += dt;
 
-    // foresight
-    if (this.cfg.mode === 'play' && this.cfg.foresight && !this.rewinding && this.state !== 'done') this.updateForesight();
-    else { this.fate = null; this.branch = null; this.verdictWant = null; }
-
-    // hover
+    // hover (before Foresight and the verdict, so both are about this frame's Wyrdling)
     const heldId = this.heldTarget !== null && isAlive(this.sim.d.wyrds[this.heldTarget]) ? this.heldTarget : null;
     this.hover = heldId ?? (this.hoverPt ? this.pick(this.hoverPt.x, this.hoverPt.y, this.hoverPt.touch) : null);
     const hk = this.armed && this.hover !== null ? `${this.armed}:${this.hover}` : '';
     if (hk && hk !== this.hoverKey && this.log) this.log.hovers++;
     this.hoverKey = hk;
+
+    // foresight and the verdict (two separate assists: either may be off)
+    if (this.cfg.mode === 'play' && !this.rewinding && this.state !== 'done') {
+      // paused: plenty of frame time, shared by every job; running: a few ms per job, never a hitch
+      const paused = this.paused || this.state === 'intro';
+      const budget = this.debugFullForesight ? Infinity : paused ? PAUSED_MS : 4;
+      const t0 = performance.now();
+      const left = () => (paused && budget !== Infinity ? budget - (performance.now() - t0) : budget);
+      if (this.cfg.foresight) this.updateForesight(budget, left);
+      else { this.fate = null; this.branch = null; this.fateJob = null; this.branchJob = null; }
+      this.updateVerdict(left);
+    } else { this.fate = null; this.branch = null; this.verdictWant = null; }
 
     // finish
     if (this.sim.d.finished && this.state === 'play') {
@@ -588,15 +598,12 @@ export class PlayScene {
     this.timeline.clear();
   }
 
-  private updateForesight(): void {
+  /** Base fate and the hovered branch, within `budget` ms per job (`left()`: what the frame has left while paused). */
+  private updateForesight(budget: number, left: () => number): void {
     const horizon = Math.round(this.cfg.horizonSec * TICK_RATE);
     const sim = this.sim;
-    // paused: plenty of frame time, shared by every job; running: a few ms per job, never a hitch
-    const paused = this.paused || this.state === 'intro';
-    const budget = this.debugFullForesight ? Infinity : paused ? PAUSED_MS : 4;
     const cost = this.debugForesightCost;
     const t0 = performance.now();
-    const left = () => (paused && budget !== Infinity ? budget - (performance.now() - t0) : budget);
     const stale = !this.fate || sim.d.tick - this.fate.from >= 6 || sim.d.tick < this.fate.from;
     if (stale && !this.fateJob) this.fateJob = new ForesightJob(sim, horizon);
     if (this.fateJob && this.fateJob.advance(budget)) {
@@ -613,9 +620,10 @@ export class PlayScene {
       // another Wyrdling, calling or reach drops the job in flight; the last result stays up until the next one lands
       const key = `${this.armed}:${target}:${reach}`;
       if (key !== this.branchKey) {
+        // a preview is another Wyrdling or calling looked at, not the same one projected further
+        if (this.log && !this.log.granted && !this.branchKey.startsWith(`${this.armed}:${target}:`)) this.log.previews++;
         this.branchKey = key;
         this.branchJob = null;
-        if (this.log && !this.log.granted) this.log.previews++;
       }
       const b = this.branch;
       const fresh = b && b.focus === target && b.skill === this.armed && b.horizon === reach && sim.d.tick >= b.from && sim.d.tick - b.from < 6;
@@ -635,7 +643,6 @@ export class PlayScene {
       this.branchKey = '';
     }
     if (cost) cost.push(t1 - t0, performance.now() - t1);
-    this.updateVerdict(left);
   }
 
   /**

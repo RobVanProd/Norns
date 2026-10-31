@@ -262,17 +262,23 @@ body.portrait:not(.rotate-ok) #rotate {
 .notice { display: none; position: absolute; top: calc(140px + var(--safe-t)); left: 50%; transform: translateX(-50%); padding: 10px 36px 12px 18px;
   text-align: center; pointer-events: auto; max-width: calc(92 * var(--uvw)); }
 .notice.show { display: block; animation: npop 0.22s ease-out; }
-@keyframes npop { from { transform: translateX(-50%) scale(0.9); opacity: 0; } }
+@keyframes npop { from { transform: translateX(-50%) scale(0.9); } }
 .notice .ntext { font-size: 17px; margin-bottom: 8px; text-shadow: 2px 2px 0 #000; }
 .notice .nrow { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .notice .nclose { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; padding: 0; border: none; background: none; color: var(--ink-dim);
   font: 700 20px/1 var(--font); pointer-events: auto; }
 .notice .nclose:hover { color: var(--ink); }
 .hud.boss .notice { top: calc(176px + var(--safe-t)); }
-/* the paused verdict, just above the skill bar; display only, so hovering stays on the world */
-.verdict { display: none; position: absolute; bottom: calc(104px + var(--safe-b)); left: 50%; transform: translateX(-50%); width: max-content;
+/* the paused verdict, in the hint's place up where the ceiling usually is, off the floors the Wyrdlings
+   walk; display only, so hovering stays on the world. A hint and the stalemate notice move down below it. */
+.verdict { display: none; position: absolute; top: calc(70px + var(--safe-t)); left: 50%; transform: translateX(-50%); width: max-content;
   max-width: calc(94 * var(--uvw)); padding: 7px 14px; font-size: 16px; text-align: center; pointer-events: none !important; }
 .verdict.show { display: block; }
+.hud.verdict-on .hint { top: calc(110px + var(--safe-t)); }
+.hud.verdict-on .notice { top: calc(182px + var(--safe-t)); }
+.hud.boss .verdict { top: calc(108px + var(--safe-t)); }
+.hud.boss.verdict-on .hint { top: calc(148px + var(--safe-t)); }
+.hud.boss.verdict-on .notice { top: calc(220px + var(--safe-t)); }
 .verdict .vlead { color: var(--teal); }
 .verdict .vgood { color: #9fe07a; }
 .verdict .vbad { color: #ff8a7e; }
@@ -296,7 +302,14 @@ body.portrait:not(.rotate-ok) #rotate {
   .fate { top: calc(54px + var(--safe-t)); }
   .notice { top: calc(112px + var(--safe-t)); padding: 6px 32px 8px 12px; }
   .notice .ntext { font-size: 14px; margin-bottom: 6px; }
-  .verdict { bottom: calc(74px + var(--safe-b)); font-size: 13px; padding: 5px 10px; }
+  .verdict { top: calc(56px + var(--safe-t)); font-size: 13px; padding: 5px 10px; }
+  .hud.verdict-on .hint { top: calc(88px + var(--safe-t)); }
+  .hud.verdict-on .notice { top: calc(146px + var(--safe-t)); }
+  .settings { max-width: min(860px, calc(96 * var(--uvw))); }
+  .settings .cols { display: grid; grid-template-columns: 1fr 1fr; column-gap: 32px; }
+  .settings .set { margin: 6px 0; font-size: 15px; }
+  .settings h3 { margin: 6px 0 0; }
+  .settings .row { margin-top: 8px; }
   .modal { padding: 14px 18px; }
   .modal h2 { font-size: 22px; }
   .btn.big { font-size: 20px; padding: 10px 24px; }

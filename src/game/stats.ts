@@ -16,6 +16,8 @@ export interface QuitPoint {
   saved: number;
   used: number;
   via: 'restart' | 'vision' | 'left' | 'closed';
+  /** the attempt as an encoded Weave, cut at `tick`: a replay stops where the player left it */
+  weave?: string;
 }
 
 export interface LevelStats {
@@ -43,9 +45,9 @@ export interface LevelStats {
   previews: number;
   /** mis-assignment proxy: a calling followed within 2 s by a rewind, or a touch grant to another Wyrdling than the one pressed */
   misgrants: number;
-  /** the last few unfinished attempts */
+  /** the last few unfinished attempts, each with its Weave */
   quits: QuitPoint[];
-  /** the last few attempts, encoded Weaves */
+  /** the last few finished attempts, encoded Weaves */
   weaves: string[];
 }
 
@@ -158,8 +160,8 @@ export function logQuit(s: Stats, id: string, log: AttemptLog, q: QuitPoint, wea
   const l = levelStats(s, id);
   log.foldInto(l);
   if (q.via === 'restart') l.restarts++;
-  keepLast(l.quits, q);
-  if (weave) keepLast(l.weaves, encodeWeave(weave));
+  // the Weave ends where the attempt did, like Cut the Threads, so its replay stops there too
+  keepLast(l.quits, weave ? { ...q, weave: encodeWeave({ ...weave, cut: weave.cut ?? q.tick }) } : q);
   writeStats(s);
 }
 

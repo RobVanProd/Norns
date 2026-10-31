@@ -8,15 +8,17 @@ import { ALL_LEVELS } from '../src/levels';
 import { TICK_RATE } from '../src/sim/constants';
 import type { LevelDef, SolutionStep } from '../src/sim/level';
 import { SLEEP_TICKS } from '../src/sim/physics';
-import { LoopDetector, UNTIMED, hashData, sameData, settled, stateHash } from '../src/sim/settle';
+import { LoopDetector, UNTIMED, hashData, sameData, settled, stateHash, tickPeriods, type LoopProof } from '../src/sim/settle';
 import { Sim } from '../src/sim/sim';
 import { SolutionPlayer } from '../src/sim/solution';
-import type { SimData } from '../src/sim/state';
+import type { SimData, Wyrd } from '../src/sim/state';
 import type { Terrain } from '../src/sim/terrain';
 import { flatLevel } from './helpers';
 
 const level = (id: string): LevelDef => ALL_LEVELS.find((l) => l.id === id)!;
 const SOLUTION_MAX = 30 * 60 * 8;
+/** Loops longer than this are not run through to find where they began. */
+const LONG = 30 * 60 * 10;
 
 interface Watched {
   sim: Sim;
@@ -63,14 +65,23 @@ function watch(def: LevelDef, steps: SolutionStep[], maxTicks: number, stopAtLoo
   }
   let loopStart = -1;
   const p = det.loop?.period;
-  if (p) for (let t = 0; t + p < hashes.length && loopStart < 0; t++) if (hashes[t] != null && hashes[t] === hashes[t + p]) loopStart = t;
+  if (p && p < LONG) {
+    // a proof of cycles apart comes before the whole state ever repeats: run on (on a copy) until it has
+    // repeated, which also checks the claimed period
+    const run = sim.clone();
+    while (run.d.tick < at + p) {
+      run.step();
+      hashes[run.d.tick] = stateHash(run);
+    }
+    for (let t = 0; t + p < hashes.length && loopStart < 0; t++) if (hashes[t] != null && hashes[t] === hashes[t + p]) loopStart = t;
+  }
   return { sim, det, at, loopStart, lastChange, observeMs };
 }
 
 function report(name: string, r: Watched): void {
   const lp = r.det.loop!;
   console.log(
-    `${name}: loop of ${lp.period} ticks from tick ${r.loopStart}, proven at tick ${r.at}: ` +
+    `${name}: loop of ${lp.period} ticks${lp.apart.length ? ` (${lp.apart.length} Wyrdlings apart)` : ''} from tick ${r.loopStart}, proven at tick ${r.at}: ` +
     `${r.at - r.loopStart} ticks (${((r.at - r.loopStart) / TICK_RATE).toFixed(1)} s) after it began, ` +
     `${r.at - r.lastChange} ticks after the last state change (tick ${r.lastChange})`,
   );
@@ -86,6 +97,40 @@ function sameTerrain(a: Terrain, b: Terrain): boolean {
 
 function gcd(a: number, b: number): number {
   return b ? gcd(b, a % b) : a;
+}
+
+/** A Wyrdling's canonical state (the timer zeroed where nothing reads it). */
+const canon = (w: Wyrd): Wyrd => ({ ...w, t: UNTIMED.has(w.st) ? 0 : w.t });
+
+/**
+ * Check a proof over `ticks` ticks from the one it was made on, by running the run on: every Wyrdling
+ * apart is in the same state one of its periods later, the rest of the state one `rest` later, and no
+ * count changes. Returns the ticks compared.
+ */
+function holds(sim: Sim, proof: LoopProof, ticks: number, label: string): number {
+  const d0 = sim.d;
+  const mask = new Uint8Array(d0.wyrds.length);
+  for (const { id } of proof.apart) mask[id] = 1;
+  const groups = new Map<number, number[]>([[proof.rest, []]]);
+  for (const { id, period } of proof.apart) groups.set(period, [...(groups.get(period) ?? []), id]);
+  let compared = 0;
+  for (const [p, ids] of groups) {
+    const a = sim.clone(), b = sim.clone();
+    for (let i = 0; i < p; i++) b.step();
+    for (let k = 0; k < ticks; k++) {
+      const at = `${label}: tick ${a.d.tick} vs ${b.d.tick}`;
+      if (p === proof.rest) {
+        expect(sameData(a.d, b.d, mask), `${at}, the rest`).toBe(true);
+        expect(sameTerrain(a.terrain, b.terrain), `${at}, terrain`).toBe(true);
+      }
+      for (const id of ids) expect(canon(b.d.wyrds[id]), `${at}, Wyrdling ${id}`).toEqual(canon(a.d.wyrds[id]));
+      expect([b.d.saved, b.d.dead, b.d.spindle, b.d.boss?.hp], at).toEqual([d0.saved, d0.dead, d0.spindle, d0.boss?.hp]);
+      a.step();
+      b.step();
+      compared++;
+    }
+  }
+  return compared;
 }
 
 describe('settled', () => {
@@ -154,7 +199,77 @@ describe('loop detector', () => {
       expect(r.at, id).toBeGreaterThan(0);
       if (r.sim.d.bodies.length) expect(r.sim.d.bodies.every((b) => b.sleep >= SLEEP_TICKS), `${id}: boulders asleep`).toBe(true);
       report(`${id} null run`, r);
+      holds(r.sim, r.det.loop!, 300, `${id} null run`);
     }
+  });
+
+  describe('proves cycles apart', () => {
+    // n3, a Warden granted to the first Wyrdling at tick 405, short of the plate: five pace between the
+    // wall and the Warden (246 ticks a lap) and press the plate, so the gate opens and shuts forever; six
+    // fell into the pit and pace there (76 ticks). The whole run repeats only every 12,032 ticks.
+    const n3 = (): Sim => {
+      const sim = Sim.create(level('n3'));
+      while (sim.d.tick < 405) sim.step();
+      expect(sim.assign(0, 'warden')).toBe(true);
+      return sim;
+    };
+
+    it('long before the whole run repeats, and the whole run does repeat', () => {
+      const sim = n3();
+      const det = new LoopDetector();
+      while (sim.d.tick < 30 * 60 * 8 && det.observe(sim) !== 'loop') sim.step();
+      const proof = det.loop!;
+      expect(proof, 'proven').not.toBeNull();
+      console.log(`n3 Warden at 405: proven at tick ${proof.at}, rest every ${proof.rest}, apart ${proof.apart.map((a) => `#${a.id}/${a.period}`).join(' ')}, whole run every ${proof.period}`);
+      expect(proof.apart.map((a) => a.id)).toEqual([6, 7, 8, 9, 10, 11]);
+      expect(proof.at).toBeLessThan(3000);
+      expect(proof.period).toBe(12032);
+      // run one whole period on: the state comes back exactly
+      const a = sim.clone(), b = sim.clone();
+      for (let i = 0; i < proof.period; i++) b.step();
+      expect(sameData(a.d, b.d)).toBe(true);
+      expect(sameTerrain(a.terrain, b.terrain)).toBe(true);
+    });
+
+    it('that hold: each apart repeats on its period, the rest on its own, and no count changes', () => {
+      // every Warden and Leaper the first six Wyrdlings could be granted at a few moments, proven or not
+      let proofs = 0, compared = 0;
+      for (const T of [300, 500]) {
+        const base = Sim.create(level('n3'));
+        while (base.d.tick < T) base.step();
+        for (const w of base.d.wyrds.slice(0, 6)) {
+          for (const skill of ['warden', 'leaper'] as const) {
+            const sim = base.clone();
+            if (!sim.assign(w.id, skill)) continue;
+            const det = new LoopDetector();
+            while (sim.d.tick < T + 6000 && !sim.d.finished && det.observe(sim) !== 'loop') sim.step();
+            const proof = det.loop;
+            if (!proof?.apart.length) continue;
+            proofs++;
+            compared += holds(sim, proof, 120, `n3 ${skill} #${w.id} at ${T}`);
+          }
+        }
+      }
+      console.log(`proofs apart checked: ${proofs}, ${compared} tick comparisons`);
+      expect(proofs).toBeGreaterThan(5);
+    }, 30_000);
+
+    it('never with a Wyrdling on a plate nothing else holds', () => {
+      // the pacers of the Warden case above press the plate: they must be part of the rest, not apart
+      const sim = n3();
+      const det = new LoopDetector();
+      while (sim.d.tick < 30 * 60 * 8 && det.observe(sim) !== 'loop') sim.step();
+      const plate = sim.L.plates[0];
+      for (const { id } of det.loop!.apart) {
+        // walk the Wyrdling apart through a lap: it never comes near the plate
+        const c = sim.clone();
+        for (let i = 0; i < 400; i++) {
+          c.step();
+          const w = c.d.wyrds[id];
+          expect(w.x < plate.x - 1 || w.x > plate.x + plate.w || w.y < plate.y - 2 || w.y > plate.y + 1).toBe(true);
+        }
+      }
+    });
   });
 
   for (const def of ALL_LEVELS) {
@@ -360,8 +475,8 @@ describe('loop proof foundations', () => {
     let checks = 0;
     for (const [def, steps] of runs()) {
       const sim = Sim.create(def);
-      const L = sim.L;
-      const periods = [2, ...L.gates.map((g) => g.speed), ...L.crushers.map((c) => c.period), ...L.firejets.map((f) => f.on + f.off)];
+      // the detector's own list of periods: a shift by their common multiple must not matter
+      const periods = [2, ...tickPeriods(sim)];
       const K = 2 * periods.reduce((a, b) => (a * b) / gcd(a, b), 1);
       const sol = new SolutionPlayer(steps);
       while (sim.d.tick < 2400 && !sim.d.finished) {
@@ -418,5 +533,55 @@ describe('loop proof foundations', () => {
     ]);
     // the loop proof compares SimData and terrain; anything else a Sim carries must be rebuilt every step
     expect(Object.keys(Sim.create(level('m1'))).sort()).toEqual(['L', 'd', 'dyn', 'events', 'terrain', 'wardens', 'weavers']);
+  });
+
+  it('knows every place the step looks at the Wyrdlings', () => {
+    // A proof of cycles apart rests on how the rest of the run can notice a passive Wyrdling: through the
+    // step's Warden, Weaver and dynamic-solid lists (SEEN in settle.ts), the gate, plate, lever and brittle
+    // zones, a fast boulder (seen in its chunks), or a guardian, its missiles and hazards, and runes (no
+    // proof apart while any is about). A new look at d.wyrds needs a look at settle.ts first.
+    const dir = new URL('../src/sim/', import.meta.url);
+    const own = new Set(['settle.ts', 'weave.ts', 'foresight.ts', 'timeline.ts', 'solution.ts', 'state.ts']);
+    const found: string[] = [];
+    for (const f of readdirSync(dir).filter((f) => f.endsWith('.ts') && !own.has(f)).sort()) {
+      const src = readFileSync(new URL(f, dir), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const line of src.split('\n')) {
+        const code = line.replace(/\/\/.*$/, '');
+        if (/\bwyrds\b/.test(code)) found.push(`${f}: ${code.trim()}`);
+      }
+    }
+    expect(found).toEqual([
+      // boss.ts: only while a guardian stands, or its missiles and hazards are about
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      "boss.ts: return sim.d.wyrds.filter((w) => isAlive(w) && w.x >= def.arena.x0 && w.x <= def.arena.x1 && w.st !== 'frozen');",
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      'boss.ts: for (const w of sim.d.wyrds) if (isAlive(w) && Math.abs(w.x - x) <= 2 && y <= w.y && y >= w.y - 10) return true;',
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      'boss.ts: for (const w of sim.d.wyrds) {',
+      // a fast boulder crushes or bowls Wyrdlings near it
+      'physics.ts: for (const w of sim.d.wyrds) {',
+      'sim.ts: tick: 0, rng: def.seed >>> 0, wyrds: [], spawned: 0, saved: 0, dead: 0, skills, used: 0,',
+      // sliceBlocked: a closing gate (the gate zones)
+      'sim.ts: for (const w of this.d.wyrds) {',
+      'sim.ts: const w = this.d.wyrds[id];',
+      // the step's frozen, Warden and Weaver lists (SEEN)
+      'sim.ts: for (const w of d.wyrds) {',
+      "sim.ts: for (const w of d.wyrds) if (w.st !== 'gone') this.updateWyrd(w);",
+      'sim.ts: this.d.wyrds.push(w);',
+      // detonate: runes
+      'sim.ts: for (const w of this.d.wyrds) {',
+      // plates, levers, brittle floors (zones)
+      'sim.ts: for (const w of d.wyrds) {',
+      'sim.ts: for (const w of d.wyrds) {',
+      'sim.ts: for (const w of d.wyrds) {',
+      // checkEnd: a passive Wyrdling is neither gone nor a Warden, so idle stays 0
+      'sim.ts: for (const w of d.wyrds) {',
+      'sim.ts: for (const w of this.d.wyrds) if (isAlive(w)) n++;',
+    ]);
   });
 });
