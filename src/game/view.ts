@@ -9,10 +9,10 @@ import type { Pipeline } from '../render/pipeline';
 import { SpriteBatch, type SpriteOpts } from '../render/spriteBatch';
 import { TerrainLayer } from '../render/terrainLayer';
 import { bossCore, bossPhase, magmaLevel, surfaceY } from '../sim/boss';
-import { SKILL_INFO, type SkillId } from '../sim/constants';
-import type { Fate } from '../sim/foresight';
+import { SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
+import { compareFates, type Fate, type FateDelta, type FateEnd, type Ghost } from '../sim/foresight';
 import type { Sim } from '../sim/sim';
-import type { Hazard, SimEvent, Wyrd } from '../sim/state';
+import type { Hazard, SimEvent, Wyrd, WyrdState } from '../sim/state';
 import { isAlive } from '../sim/state';
 
 export interface ViewInput {
@@ -26,6 +26,10 @@ export interface ViewInput {
   branch: Fate | null;
   showForesight: boolean;
   rewinding: boolean;
+  /** Q or the touch button held: the branch looks further ahead */
+  projecting: boolean;
+  /** the pointer is a finger (for the look-ahead hint) */
+  touch: boolean;
 }
 
 interface Popup { text: string; x: number; y: number; life: number; r: number; g: number; b: number }
@@ -783,7 +787,11 @@ export class GameView {
     const O = this.over;
     const W = this.atlas.white;
     const dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
-    const fate = inp.fate, branch = inp.branch;
+    const fate = inp.fate;
+    // a branch belongs to one Wyrdling and calling; while the next one computes, the last stays hidden
+    const branch = inp.branch && inp.hover !== null && inp.branch.focus === inp.hover && inp.branch.skill === inp.armed ? inp.branch : null;
+    // what the branch is judged against: its own shadow run when it looks past the base horizon
+    const baseline = branch?.shadow ?? fate;
     const phase = (inp.time * 30) % 4;
     const drawPath = (pts: number[], r: number, g: number, b: number, a: number, every: number) => {
       const n = pts.length / 2;
@@ -796,8 +804,7 @@ export class GameView {
         O.push(dot, x, y, { r, g, b, a: a * (0.45 + 0.55 * fade), sx: 2, sy: 2 });
       }
     };
-    const endMarker = (id: number, f: Fate, bright: boolean) => {
-      const e = f.ends.get(id);
+    const endMarker = (e: FateEnd | undefined, bright: boolean) => {
       if (!e) return;
       if (e.kind === 'dead') O.push(this.f('skull'), e.x, e.y - 5, { a: bright ? 1 : 0.75 });
       else if (e.kind === 'saved') O.push(this.f('spark'), e.x, e.y - 8, { a: bright ? 1 : 0.75 });
@@ -805,15 +812,14 @@ export class GameView {
     if (fate) {
       for (const [id, pts] of fate.paths) {
         const e = fate.ends.get(id);
-        const focus = branch && inp.hover === id;
-        if (focus) continue;
+        if (branch && inp.hover === id) continue;
         const dead = e?.kind === 'dead';
         const saved = e?.kind === 'saved';
-        const changed = branch && branch.ends.get(id)?.kind !== e?.kind;
+        const changed = branch && branch.ends.get(id)?.kind !== baseline?.ends.get(id)?.kind;
         if (changed) continue;
         const [r, g, b] = dead ? [1, 0.3, 0.25] : saved ? [0.6, 1, 0.55] : [1, 0.92, 0.7];
         drawPath(pts, r, g, b, dead ? 0.9 : 0.55, dead ? 2 : 3);
-        endMarker(id, fate, false);
+        endMarker(e, false);
       }
       // boulders
       for (const [, pts] of fate.bodies) drawPath(pts, 0.85, 0.75, 0.6, 0.45, 4);
@@ -822,30 +828,84 @@ export class GameView {
         O.push(this.f('target', Math.floor(inp.time * 10)), fate.blasts[i], fate.blasts[i + 1], { r: 1, g: 0.6, b: 0.2, a: 0.6, sx: fate.blasts[i + 3] / 7, sy: fate.blasts[i + 3] / 7, smooth: true });
       }
     }
-    if (branch && inp.hover !== null) {
+    if (branch) {
+      if (branch.ghost) this.drawGhost(branch.ghost, inp.time);
       for (const [id, pts] of branch.paths) {
         const e = branch.ends.get(id);
-        const base = fate?.ends.get(id);
+        const base = baseline?.ends.get(id);
         const focus = inp.hover === id;
         if (!focus && base && e && base.kind === e.kind) continue;
         const dead = e?.kind === 'dead';
         const [r, g, b] = dead ? [1, 0.35, 0.3] : focus ? [1, 0.85, 0.3] : [0.7, 1, 0.6];
+        // a projection's other threads stop at the usual horizon, but where a changed fate ends still shows
         drawPath(pts, r, g, b, 1, 2);
-        endMarker(id, branch, true);
+        endMarker(e, true);
       }
-      if (fate) {
-        const ds = branch.saved - fate.saved, dd = branch.dead - fate.dead;
-        const w = sim.d.wyrds[inp.hover];
-        if (w) {
-          const parts: string[] = [];
-          if (ds !== 0) parts.push(`${ds > 0 ? '+' : ''}${ds} saved`);
-          if (dd !== 0) parts.push(`${dd > 0 ? '+' : ''}${dd} lost`);
-          if (parts.length) {
-            const good = ds >= 0 && dd <= 0;
-            this.text(O, parts.join(' '), w.x, w.y - 38, good ? 0.6 : 1, good ? 1 : 0.45, good ? 0.6 : 0.4, 1);
-          }
-        }
-      }
+    }
+    // the hovered Wyrdling: its own end in words, then what the calling changes for everyone
+    const w = inp.hover !== null ? sim.d.wyrds[inp.hover] : undefined;
+    if (!w || !isAlive(w)) return;
+    const rows: Seg[][] = [];
+    const own = (branch ?? fate)?.ends.get(w.id);
+    if (own) {
+      const [s, c] = endWords(own);
+      rows.push([{ s, c }]);
+    }
+    if (branch) {
+      if (baseline) rows.push(deltaWords(compareFates(baseline, branch)));
+      if (branch.skill && sim.d.skills[branch.skill] === 1) rows.push([{ s: `uses your last ${SKILL_INFO[branch.skill].name}`, c: COST }]);
+      const looking = inp.projecting && !branch.shadow;
+      if (looking || !inp.projecting) rows.push([{ s: looking ? 'looking further ahead...' : inp.touch ? 'hold the 15s eye button' : 'hold Q to look 15s ahead', c: DIM }]);
+    }
+    // one shared centre, pulled in from the view's edges so no row is cut off
+    const v = this.p.view;
+    let half = 0;
+    for (const r of rows) half = Math.max(half, this.rowWidth(r) / 2);
+    const x = Math.max(v.x + half + 2, Math.min(v.x + v.z - half - 2, w.x));
+    rows.forEach((r, i) => this.textRow(r, x, w.y - 38 - i * 10));
+  }
+
+  /** What the calling would leave: a dimmed hollow with a light outline where it digs, gold where it weaves. */
+  private drawGhost(g: Ghost, time: number): void {
+    const O = this.over, W = this.atlas.white;
+    const dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
+    const k = 0.8 + 0.2 * Math.sin(time * 4);
+    const runs = (r: number[], cr: number, cg: number, cb: number, a: number) => {
+      for (let i = 0; i < r.length; i += 3) O.push(dot, r[i], r[i + 1], { sx: r[i + 2], sy: 1, r: cr, g: cg, b: cb, a: a * k });
+    };
+    runs(g.carved, 0.06, 0.04, 0.1, 0.45);
+    runs(g.edge, 1, 0.93, 0.75, 0.8);
+    runs(g.added, 1, 0.8, 0.3, 0.65);
+  }
+
+  private textWidth(s: string): number {
+    let w = s.length - 1;
+    for (const ch of s) w += (this.atlas.glyphs.get(ch) ?? this.atlas.glyphs.get(ch.toUpperCase()))?.w ?? 4;
+    return w;
+  }
+
+  /** '·' is not in the pixel font: rows draw it as a dot with room around it */
+  private segWidth(s: string): number {
+    return s === '·' ? 9 : this.textWidth(s);
+  }
+
+  private rowWidth(segs: Seg[]): number {
+    let total = -1;
+    for (const g of segs) total += this.segWidth(g.s) + 1;
+    return total;
+  }
+
+  /** Coloured pieces of one centred line. */
+  private textRow(segs: Seg[], x: number, y: number): void {
+    let cx = Math.round(x - this.rowWidth(segs) / 2);
+    const W = this.atlas.white;
+    const dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
+    for (const g of segs) {
+      if (g.s === '·') {
+        this.over.push(dot, cx + 4, y + 4, { r: 0.05, g: 0.03, b: 0.08, a: 0.85, sx: 2, sy: 2 });
+        this.over.push(dot, cx + 3, y + 3, { r: g.c[0], g: g.c[1], b: g.c[2], sx: 2, sy: 2 });
+      } else this.text(this.over, g.s, cx, y, g.c[0], g.c[1], g.c[2], 1, 'left');
+      cx += this.segWidth(g.s) + 1;
     }
   }
 
@@ -873,4 +933,56 @@ export class GameView {
     }
     void sim;
   }
+}
+
+type Rgb = readonly [number, number, number];
+interface Seg { s: string; c: Rgb }
+
+const GOOD: Rgb = [0.6, 1, 0.6], BAD: Rgb = [1, 0.45, 0.4], GRIM: Rgb = [0.85, 0.55, 0.5], DIM: Rgb = [0.8, 0.75, 0.68];
+const COST: Rgb = [1, 0.78, 0.4];
+
+const DEATH_WORDS: Record<string, string> = {
+  fall: 'falls', void: 'falls', water: 'drowns', lava: 'burns', fire: 'burns', magma: 'burns', sweep: 'burns', fireball: 'burns',
+  meteor: 'burns', spikes: 'spiked', crusher: 'crushed', slam: 'crushed', boulder: 'crushed', buried: 'buried', venom: 'poisoned',
+  icicle: 'struck', burrow: 'swallowed',
+};
+
+const STILL: Partial<Record<WyrdState, string>> = {
+  warden: 'stands guard', frozen: 'still frozen', fall: 'still falling', glide: 'still gliding', glide_open: 'still gliding',
+  climb: 'still climbing', hoist: 'still climbing', weave: 'still weaving', bash: 'still bashing', mine: 'still mining',
+  dig: 'still digging', leap: 'still in the air', tumble: 'still in the air', wait: 'still waiting',
+};
+
+/** A Wyrdling's predicted end, in words. */
+function endWords(e: FateEnd): [string, Rgb] {
+  if (e.kind === 'saved') return ['reaches the gate', GOOD];
+  if (e.kind === 'dead') return [`${DEATH_WORDS[e.cause ?? ''] ?? 'lost'} at x ${Math.round(e.x)}`, BAD];
+  if (e.trap) return [e.turned === 'warden' ? 'held back by a Warden' : 'trapped between walls', [1, 0.75, 0.4]];
+  if (e.turned) return [`turned back by a ${e.turned === 'warden' ? 'Warden' : 'wall'}`, [0.95, 0.85, 0.65]];
+  return [STILL[e.st ?? 'walk'] ?? 'still walking', [0.95, 0.9, 0.8]];
+}
+
+/** What a calling changes for everyone, over the stretch both predictions cover. */
+function deltaWords(d: FateDelta): Seg[] {
+  const out: Seg[] = [];
+  const add = (s: string, c: Rgb) => {
+    if (out.length) out.push({ s: '·', c: DIM });
+    out.push({ s, c });
+  };
+  const gains = [d.saved ? `${d.saved} saved` : '', d.freed ? `${d.freed} freed` : ''].filter(Boolean);
+  if (d.lost && gains.length && d.firstLoss <= d.firstGain) {
+    // a sacrifice: the loss comes first and buys what follows, so it shouldn't read as a mistake
+    add(`${d.lost} lost`, BAD);
+    add(`${gains.join(', ')} later`, GOOD);
+  } else {
+    if (d.saved) add(`saves ${d.saved}`, GOOD);
+    if (d.freed) add(`frees ${d.freed}`, GOOD);
+    if (d.lost) add(`${d.lost} more lost`, BAD);
+    if (d.delayed) add(`${d.delayed} fewer home`, BAD);
+  }
+  if (d.stillLost) add(`${d.stillLost} still lost`, GRIM);
+  const secs = Math.round(d.window / TICK_RATE);
+  if (!out.length) out.push({ s: `no change in ${secs}s`, c: DIM });
+  else out.push({ s: ` (${secs}s)`, c: DIM });
+  return out;
 }

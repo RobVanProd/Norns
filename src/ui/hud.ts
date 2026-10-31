@@ -13,6 +13,8 @@ export interface HudCallbacks {
   /** rewind button pressed (true) or released (false); hold vs toggle is the scene's call */
   rewind(down: boolean): void;
   foresight(): void;
+  /** held: Foresight follows the hovered Wyrdling's calling further ahead */
+  project(on: boolean): void;
   restart(): void;
   menu(): void;
 }
@@ -52,6 +54,7 @@ export class Hud {
   private speedBtn: HTMLButtonElement;
   private eyeBtn: HTMLButtonElement;
   private rewindBtn: HTMLButtonElement;
+  private projectBtn: HTMLButtonElement;
   private bossWrap: HTMLDivElement;
   private bossFill: HTMLDivElement;
   private bossName: HTMLDivElement;
@@ -123,8 +126,15 @@ export class Hud {
     this.rewindBtn.addEventListener('pointercancel', stop);
     this.rewindBtn.addEventListener('pointerleave', stop);
     this.rewindBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    // touch stand-in for holding Q: one finger holds a Wyrdling, the other holds this (touch screens only, see CSS)
+    this.projectBtn = el('button', { class: 'project', title: 'Hold to look 15 s ahead (Q)', 'aria-label': 'Look further ahead' }, icon('eye', 2), el('span', { class: 'psec', text: '15s' }));
+    const pOn = (e: Event) => { e.preventDefault(); e.stopPropagation(); this.projectBtn.classList.add('on'); cb.project(true); };
+    const pOff = (e: Event) => { e.preventDefault(); this.projectBtn.classList.remove('on'); cb.project(false); };
+    this.projectBtn.addEventListener('pointerdown', pOn);
+    for (const t of ['pointerup', 'pointercancel', 'pointerleave'] as const) this.projectBtn.addEventListener(t, pOff);
+    this.projectBtn.addEventListener('contextmenu', (e) => e.preventDefault());
     this.hintEl = el('div', { class: 'hint' });
-    const bottom = el('div', { class: 'hud-bottom' }, bar, this.rewindBtn);
+    const bottom = el('div', { class: 'hud-bottom' }, bar, this.rewindBtn, this.projectBtn);
     this.root = el('div', { class: 'hud' }, top, this.bossWrap, this.fateEl, this.hintEl, bottom);
     // HUD panels swallow pointer events so taps on buttons don't reach the world
     for (const p of [top, bottom, this.bossWrap]) p.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -192,6 +202,7 @@ export class Hud {
     this.speedBtn.dataset.speed = `${s.speed}×`;
     swap(this.eyeBtn, s.foresight ? 'eye' : 'eye_off');
     this.eyeBtn.classList.toggle('on', s.foresight);
+    this.projectBtn.classList.toggle('off', !s.foresight);
     this.pauseBtn.classList.toggle('on', s.paused);
     this.rewindBtn.classList.toggle('on', s.rewinding);
     const rewindTitle = s.rewindToggle ? 'Rewind (R): press to start, again to stop' : 'Hold to rewind (R)';

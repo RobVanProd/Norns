@@ -49,6 +49,9 @@ export interface PlayHooks {
 
 const BOSS_NAMES: Record<string, string> = { wyrm: 'The Gnawing Wyrm', jotunn: 'Hrímgrímnir, Frost Jötunn', herald: "Surtr's Herald" };
 
+/** How far holding Q (or the touch button) projects the hovered Wyrdling's branch. */
+const PROJECT_SEC = 15;
+
 export class PlayScene {
   sim: Sim;
   readonly cfg: PlayConfig;
@@ -74,6 +77,9 @@ export class PlayScene {
   private branchKey = '';
   private fateJob: ForesightJob | null = null;
   private branchJob: ForesightJob | null = null;
+  /** Q held / touch button held: the branch looks PROJECT_SEC ahead */
+  private projectKey = false;
+  private projectTouch = false;
   private acc = 0;
   private rewinding = false;
   private rewindAcc = 0;
@@ -123,6 +129,7 @@ export class PlayScene {
         speed: () => this.cycleSpeed(),
         rewind: (down) => this.rewindInput(down),
         foresight: () => this.toggleForesight(),
+        project: (on) => { this.projectTouch = on; },
         restart: () => hooks.restart(),
         menu: () => hooks.menu(),
       });
@@ -187,12 +194,13 @@ export class PlayScene {
       if (down && code === 'Escape') this.hooks.menu();
       return;
     }
-    if (code === 'Blur') { this.setRewind(false); return; }
+    if (code === 'Blur') { this.setRewind(false); this.projectKey = false; return; }
     // behind a dialog the level takes no keys but Esc: R would start a rewind nobody sees (and nothing
     // stops in toggle mode), Space would set the level running behind the intro card or pause menu
     if (this.hooks.dialogOpen() && code !== 'Escape') return;
     // key repeat must not restart a rewind that stopped at the first tick (or flip a toggle)
     if (code === 'KeyR' || code === 'Backspace') { if (!repeat) this.rewindInput(down); return; }
+    if (code === 'KeyQ') { this.projectKey = down; return; }
     if (!down || repeat) return;
     const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(code);
     if (idx >= 0) {
@@ -245,6 +253,8 @@ export class PlayScene {
 
   toggleForesight(): void {
     this.cfg.foresight = !this.cfg.foresight;
+    // the touch look-ahead button hides with Foresight, so it may never see its finger lift
+    this.projectTouch = false;
     audio.sfx('foresight');
     this.hooks.foresightChanged(this.cfg.foresight);
   }
@@ -266,7 +276,7 @@ export class PlayScene {
   }
 
   private forgetFate(): void {
-    this.fate = null; this.fateJob = null; this.branchJob = null; this.branchKey = '';
+    this.fate = null; this.fateJob = null; this.branch = null; this.branchJob = null; this.branchKey = '';
   }
 
   /** Paused tick-stepping (`,` `.`; Shift for a second): forward does exactly a game-loop tick, back
@@ -358,9 +368,7 @@ export class PlayScene {
       this.view.handleEvents(fresh, this.sim);
       this.sound.play(fresh, this.sim.d.tick, this.camX, this.p.viewW);
       this.hud?.flashSkill(this.armed);
-      this.fate = null;
-      this.fateJob = null;
-      this.branchKey = '';
+      this.forgetFate();
       if (this.sim.d.skills[this.armed] <= 0) this.armed = null;
     } else {
       this.hud?.denySkill(this.armed);
@@ -503,22 +511,31 @@ export class PlayScene {
     const sim = this.sim;
     // paused: plenty of frame time; running: a few ms per frame, never a hitch
     const budget = this.debugFullForesight ? Infinity : this.paused || this.state === 'intro' ? 12 : 4;
+    const cost = this.debugForesightCost;
+    const t0 = cost ? performance.now() : 0;
     const stale = !this.fate || sim.d.tick - this.fate.from >= 6 || sim.d.tick < this.fate.from;
     if (stale && !this.fateJob) this.fateJob = new ForesightJob(sim, horizon);
     if (this.fateJob && this.fateJob.advance(budget)) {
       this.fate = this.fateJob.fate;
       this.fateJob = null;
-      this.branchKey = '';
     }
     if (!this.fate && !this.fateJob) this.fateJob = new ForesightJob(sim, horizon);
+    const t1 = cost ? performance.now() : 0;
     const target = this.hover;
-    if (this.armed && target !== null) {
-      const w = sim.d.wyrds[target];
-      const key = `${this.armed}:${target}:${this.fate?.from ?? -1}`;
-      if (key !== this.branchKey) {
-        this.branchKey = key;
-        this.branchJob = w && sim.canAssign(w, this.armed) ? new ForesightJob(sim, horizon, { id: target, skill: this.armed }) : null;
-        if (!this.branchJob) this.branch = null;
+    const w = target !== null ? sim.d.wyrds[target] : undefined;
+    if (this.armed && target !== null && w && sim.canAssign(w, this.armed)) {
+      const far = this.projectKey || this.projectTouch;
+      const reach = far ? PROJECT_SEC * TICK_RATE : horizon;
+      // another Wyrdling, calling or reach drops the job in flight; the last result stays up until the next one lands
+      const key = `${this.armed}:${target}:${reach}`;
+      if (key !== this.branchKey) { this.branchKey = key; this.branchJob = null; }
+      const b = this.branch;
+      const fresh = b && b.focus === target && b.skill === this.armed && b.horizon === reach && sim.d.tick >= b.from && sim.d.tick - b.from < 6;
+      // a job runs to the end before the next starts, so a long projection still lands on a heavy level
+      if (!fresh && !this.branchJob) {
+        // a projection outruns the base fate, so it carries its own baseline, stepped in this job's budget;
+        // other Wyrdlings' changed threads stop at the usual horizon
+        this.branchJob = new ForesightJob(sim, reach, { id: target, skill: this.armed }, { shadow: far, pathHorizon: horizon });
       }
       if (this.branchJob && this.branchJob.advance(budget)) {
         this.branch = this.branchJob.fate;
@@ -529,6 +546,7 @@ export class PlayScene {
       this.branchJob = null;
       this.branchKey = '';
     }
+    if (cost) cost.push(t1 - t0, performance.now() - t1);
   }
 
   /** Results screen → back into the level just before it ended, paused, so the player can keep rewinding.
@@ -556,6 +574,8 @@ export class PlayScene {
   debugHold = false;
   /** Dev tooling: finish Foresight jobs every frame, so captured frames don't depend on machine speed. */
   debugFullForesight = false;
+  /** Dev tooling: when an array, each frame appends the ms its base and branch Foresight jobs took. */
+  debugForesightCost: number[] | null = null;
 
   render(): void {
     if (this.debugCam) { this.camX = this.debugCam.x; this.camY = this.debugCam.y; this.clampCam(); }
@@ -571,6 +591,7 @@ export class PlayScene {
       sim: this.sim, time: this.time, dt: 1, hover: this.hover, armed: this.armed,
       canAssign: this.hover !== null && this.armed !== null && this.sim.canAssign(this.sim.d.wyrds[this.hover], this.armed),
       fate: this.fate, branch: this.branch, showForesight: this.cfg.foresight && this.cfg.mode === 'play', rewinding: this.rewinding,
+      projecting: this.projectKey || this.projectTouch, touch: !!this.hoverPt?.touch,
     });
     this.p.post.rewind = this.rewindFx;
     this.p.post.pause = this.paused || this.state === 'intro' ? 1 : 0;
