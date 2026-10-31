@@ -1,12 +1,13 @@
 // Live audio engine: owns the AudioContext, the bus graph, the song/stinger players and SFX voices.
 
+import { BarkLimiter } from './barks';
 import { mulberry32 } from './dsp';
 import { INSTRUMENTS, warmZone, zoneCount, type InstId } from './instruments';
 import { getSong, getStinger, prepare } from './library';
 import { buildMixer, DEFAULT_VOLS, MUSIC_TRIM, setDelayForSong, type Mixer } from './mixer';
 import { SongPlayer } from './player';
 import { getSfxBuffer, SFX } from './sfx';
-import { SFX_IDS, type AudioEngine, type SfxId, type SfxOpts, type SongId, type StingerId } from './types';
+import { SFX_IDS, type AudioEngine, type SfxId, type SfxOpts, type SongId, type StingerId, type Volumes } from './types';
 
 const LOOKAHEAD = 0.15; // s, foreground
 const LOOKAHEAD_HIDDEN = 1.2; // s, background tabs (timers may be throttled)
@@ -34,6 +35,7 @@ export class Engine implements AudioEngine {
   private bendModel = { t0: 0, c0: 0, target: 0, tau: 0.1 };
   private worker: Worker | null = null;
   private sfxLast = new Map<SfxId, number>();
+  private barks = new BarkLimiter();
   private voices: SfxVoice[] = [];
   private rand = mulberry32(0x5eed);
   private warmQueue: (() => void)[] = [];
@@ -204,9 +206,11 @@ export class Engine implements AudioEngine {
 
   // ---- volumes ------------------------------------------------------------------------------
 
-  setVolumes(v: { master?: number; music?: number; sfx?: number }): void {
+  setVolumes(v: Volumes): void {
     const c = (x: number | undefined, d: number) => (x === undefined || !Number.isFinite(x) ? d : Math.max(0, Math.min(1, x)));
-    this.vols = { master: c(v.master, this.vols.master), music: c(v.music, this.vols.music), sfx: c(v.sfx, this.vols.sfx) };
+    this.vols = {
+      master: c(v.master, this.vols.master), music: c(v.music, this.vols.music), sfx: c(v.sfx, this.vols.sfx), voice: c(v.voice, this.vols.voice),
+    };
     this.applyVolumes();
   }
 
@@ -223,6 +227,7 @@ export class Engine implements AudioEngine {
     m.master.gain.setTargetAtTime(this.muted ? 0 : this.vols.master, now, tc);
     m.musicVol.gain.setTargetAtTime(this.vols.music * MUSIC_TRIM, now, tc);
     m.sfxVol.gain.setTargetAtTime(this.vols.sfx, now, tc);
+    m.voiceVol.gain.setTargetAtTime(this.vols.voice, now, tc);
   }
 
   // ---- sfx ----------------------------------------------------------------------------------
@@ -235,6 +240,8 @@ export class Engine implements AudioEngine {
     const now = ctx.currentTime;
     const last = this.sfxLast.get(id) ?? -1;
     if (now - last < (def.gap ?? 0.02)) return;
+    // barks also share one crowd limit across every kind (see barks.ts)
+    if (def.bus === 'voice' && !this.barks.allow(id, now)) return;
     this.sfxLast.set(id, now);
     // prune finished voices, enforce per-id and global limits (steal the oldest)
     this.voices = this.voices.filter((v) => v.end > now);
@@ -252,7 +259,7 @@ export class Engine implements AudioEngine {
     g.gain.value = def.gain * Math.max(0, Math.min(1, opts?.volume ?? 1));
     const pan = ctx.createStereoPanner();
     pan.pan.value = Math.max(-1, Math.min(1, opts?.pan ?? 0));
-    src.connect(g).connect(pan).connect(m.sfxIn);
+    src.connect(g).connect(pan).connect(def.bus === 'voice' ? m.voiceIn : m.sfxIn);
     let send: GainNode | null = null;
     if (def.rev) { send = ctx.createGain(); send.gain.value = def.rev; pan.connect(send).connect(m.sfxRevIn); }
     const end = now + buf.duration / pitch;

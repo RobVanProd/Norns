@@ -4,7 +4,7 @@ import { BODY_CRUSH_SPEED, BODY_GRAVITY, Mat } from './constants';
 import { isAlive, type Body } from './state';
 import type { Sim } from './sim';
 
-const SLEEP_TICKS = 20;
+export const SLEEP_TICKS = 20;
 const SUBSTEPS = 3;
 const RESTITUTION = 0.25;
 
@@ -80,6 +80,7 @@ export function stepBodies(sim: Sim): void {
   for (const b of bodies) {
     if (b.gone || b.sleep >= SLEEP_TICKS) continue;
     let touching = false;
+    let stilled = false; // a contact this tick left the body (almost) still
     for (let s = 0; s < SUBSTEPS; s++) {
       b.vy += BODY_GRAVITY / SUBSTEPS;
       b.x += b.vx / SUBSTEPS;
@@ -109,6 +110,7 @@ export function stepBodies(sim: Sim): void {
       const vt2 = vt * 0.992;
       b.vx += (vt2 - vt) * tx;
       b.vy += (vt2 - vt) * ty;
+      if (Math.abs(b.vx) < 0.05 && Math.abs(b.vy) < 0.05) stilled = true;
     }
     // rolling angle: arc length / r
     if (touching) {
@@ -164,9 +166,12 @@ export function stepBodies(sim: Sim): void {
         }
       }
     }
-    // sleep
-    if (touching && speed < 0.05) b.sleep++;
-    else b.sleep = 0;
+    // sleep. A body at rest still bobs below a pixel (gravity acts every substep, the push-out moves half
+    // pixels), so it often ends a tick in the air at up to 0.4 px/tick. A contact that stilled it counts
+    // as rest; a slow tick in the air between two such contacts neither counts nor resets; anything else
+    // resets. Without this a resting boulder never sleeps and its position never repeats exactly.
+    if (stilled && Math.abs(b.vx) < 0.05) b.sleep++;
+    else if (touching || speed >= 0.5 || Math.abs(b.vx) >= 0.05) b.sleep = 0;
     if (b.sleep >= SLEEP_TICKS) { b.vx = 0; b.vy = 0; }
   }
   // body-body contacts

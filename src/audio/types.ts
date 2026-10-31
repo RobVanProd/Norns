@@ -18,13 +18,17 @@ export type SfxId =
   | 'icicle_fall' | 'ice_shatter' | 'freeze' | 'slam'
   | 'fire_whoosh' | 'magma' | 'meteor'
   | 'rewind_start' | 'rewind_end' | 'foresight' | 'pause' | 'unpause'
-  | 'star' | 'purchase' | 'level_start';
+  | 'star' | 'purchase' | 'level_start'
+  // Wyrdling barks: formant gibberish on the voice bus (own volume, rate-limited, see barks.ts)
+  | 'bark_hup' | 'bark_mm' | 'bark_oh' | 'bark_whee' | 'bark_yay';
 
 export interface SfxOpts {
   pan?: number /* -1..1 */;
   volume?: number /* 0..1, default 1 */;
   pitch?: number /* playback-rate multiplier, default 1 */;
 }
+
+export interface Volumes { master?: number; music?: number; sfx?: number; voice?: number }
 
 export interface AudioEngine {
   /** Must be called from a user gesture (click/touch/key). Idempotent. */
@@ -33,12 +37,12 @@ export interface AudioEngine {
   playMusic(id: SongId, opts?: { fadeIn?: number }): void; // crossfades from the current song; same id = no-op
   stopMusic(fadeOut?: number): void;
   stinger(id: StingerId): void; // short jingle; ducks music while it plays
-  sfx(id: SfxId, opts?: SfxOpts): void; // fire-and-forget, safe to spam (internal voice limiting/rate limiting per id)
+  sfx(id: SfxId, opts?: SfxOpts): void; // fire-and-forget, safe to spam (internal voice limiting/rate limiting per id; barks also share a crowd limit)
   setIntensity(level: 0 | 1 | 2): void; // boss phases: adds/removes layers live, on bar boundaries
   setRewinding(on: boolean): void; // tape-reverse feel: music pitch bends down + lowpass + wobble while on
   setPaused(on: boolean): void; // music muffled (lowpass) + quieter while paused
   setSpeed(mult: 1 | 2 | 4): void; // optional subtle effect for fast-forward (e.g. slight highpass); must not change tempo
-  setVolumes(v: { master?: number; music?: number; sfx?: number }): void;
+  setVolumes(v: Volumes): void;
   setMuted(m: boolean): void;
 }
 
@@ -61,4 +65,5 @@ export const SFX_IDS: readonly SfxId[] = [
   'fire_whoosh', 'magma', 'meteor',
   'rewind_start', 'rewind_end', 'foresight', 'pause', 'unpause',
   'star', 'purchase', 'level_start',
+  'bark_hup', 'bark_mm', 'bark_oh', 'bark_whee', 'bark_yay',
 ];

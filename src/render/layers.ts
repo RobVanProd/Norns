@@ -111,8 +111,11 @@ function grounded(cv: HTMLCanvasElement): boolean {
 export class Background {
   readonly meshes: THREE.Mesh[] = [];
   private mats: THREE.RawShaderMaterial[] = [];
+  /** the camera the backdrop is drawn for: the world's own, or (still) one that never moves */
+  private bgView = new THREE.Vector4();
+  private still = false;
 
-  constructor(bg: BackgroundSet, view: THREE.Vector4, levelW: number, levelH: number) {
+  constructor(bg: BackgroundSet, private view: THREE.Vector4, levelW: number, private levelH: number) {
     const stops = bg.sky.slice(0, 4).map(hexToVec3);
     while (stops.length < 2) stops.push(stops[0] ?? new THREE.Vector3(0.1, 0.1, 0.2));
     const padded = [...stops];
@@ -120,7 +123,7 @@ export class Background {
     const level = new THREE.Vector2(levelW, levelH);
     const sky = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3, vertexShader: FS_VERT, fragmentShader: SKY_FRAG,
-      uniforms: { uStops: { value: padded }, uCount: { value: stops.length }, uView: { value: view }, uLevel: { value: level } },
+      uniforms: { uStops: { value: padded }, uCount: { value: stops.length }, uView: { value: this.bgView }, uLevel: { value: level } },
       depthTest: false, depthWrite: false,
     });
     this.mats.push(sky);
@@ -131,7 +134,7 @@ export class Background {
         glslVersion: THREE.GLSL3, vertexShader: FS_VERT, fragmentShader: PARALLAX_FRAG,
         uniforms: {
           uTex: { value: tex }, uTexSize: { value: new THREE.Vector2(layer.canvas.width, layer.canvas.height) },
-          uView: { value: view }, uLevel: { value: level }, uPar: { value: layer.parallax }, uBottom: { value: layer.bottomOffset },
+          uView: { value: this.bgView }, uLevel: { value: level }, uPar: { value: layer.parallax }, uBottom: { value: layer.bottomOffset },
           uTime: { value: 0 }, uDrift: { value: 0 }, uExtend: { value: grounded(layer.canvas) ? 1 : 0 },
         },
         depthTest: false, depthWrite: false, transparent: true,
@@ -139,9 +142,24 @@ export class Background {
       this.mats.push(m);
       this.meshes.push(fsQuad(m, 1 + i));
     });
+    this.sync();
   }
 
+  /** Reduce motion: no parallax. The sky and every layer hold still, drawn as for a camera resting at the
+   *  level's bottom left, while the world scrolls over them. */
+  setStill(on: boolean): void {
+    this.still = on;
+    this.sync();
+  }
+
+  private sync(): void {
+    this.bgView.copy(this.view);
+    if (this.still) this.bgView.set(0, Math.max(0, this.levelH - this.view.w), this.view.z, this.view.w);
+  }
+
+  /** Each frame, once the camera is set. */
   setTime(t: number): void {
+    this.sync();
     for (const m of this.mats) if (m.uniforms.uTime) m.uniforms.uTime.value = t;
   }
 
@@ -217,6 +235,9 @@ export class LiquidLayer {
         uFoam: { value: lava ? new THREE.Vector3(1.0, 0.86, 0.4) : new THREE.Vector3(0.75, 0.93, 1.0) },
         uAlpha: { value: lava ? 1.0 : 0.78 }, uSurface: { value: rect.y }, uLava: { value: lava ? 1 : 0 },
       },
+      // worldToClip flips y, which turns this quad's winding clockwise: with the default FrontSide it
+      // was culled and every pool of water, lava and boss magma was invisible
+      side: THREE.DoubleSide,
       transparent: true, depthTest: false, depthWrite: false,
     });
     const geo = new THREE.BufferGeometry();

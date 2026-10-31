@@ -59,6 +59,11 @@ export function stepSand(sim: Sim): void {
     let own = false;
     const write = () => { if (!own) { c = t.writable(ci); own = true; } };
     for (let ly = Math.min(CM, H - 1 - y0); ly >= 0; ly--) {
+      // grains only ever move down, so rows above are as they were: jump straight to the next one up
+      // that holds a grain (no row in between would have done anything)
+      const k = c.lastIndexOf(SAND, (ly << CS_SHIFT) | CM);
+      if (k < 0) break;
+      ly = k >> CS_SHIFT;
       const y = y0 + ly;
       const ltr = ((y + tick) & 1) === 0;
       const row = ly << CS_SHIFT;

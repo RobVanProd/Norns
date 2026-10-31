@@ -100,16 +100,30 @@ export interface BossState {
   hurt: number;
   /** index of the active Seiðr stone (-1 none) */
   stone: number;
+  /** how many stones have lit so far: the position in the fixed stone order of the next one to light */
+  ring: number;
   /** stone cooldown after firing */
   stoneCd: number;
   /** defeat animation timer (0 = alive) */
   dying: number;
-  /** free-form numeric memory for the specific boss (positions, targets) */
-  m: number[];
 }
 
+/** Every event the simulation emits. The view's effects and the sound map key on these names, so a
+ *  renamed or retired event is a type error there rather than a silent miss. */
+export type SimEventType =
+  // Wyrdlings
+  | 'spawn' | 'assign' | 'death' | 'freeze' | 'land' | 'leap' | 'saved' | 'quota_met' | 'shrug' | 'bowled'
+  // callings at work
+  | 'dig' | 'bash' | 'mine' | 'clink' | 'plank' | 'rune_plant' | 'rune_tick' | 'blast'
+  // the level
+  | 'gate_open' | 'gate_move' | 'plate_on' | 'plate_off' | 'lever' | 'spindle' | 'crusher_break'
+  | 'brittle_crack' | 'brittle_break' | 'boulder_impact' | 'boulder_roll' | 'stone_harden' | 'sand' | 'finished'
+  // guardians: stones, attacks and the telegraphed hazards they leave (named when their warning ends)
+  | 'seidr_on' | 'seidr_beam' | 'boss_telegraph' | 'boss_hit' | 'boss_defeat' | 'venom_spit' | 'venom_hit' | 'burrow'
+  | 'icicle_warn' | 'ice_shatter' | 'inhale' | 'slam' | 'magma_warn' | 'meteor' | `hazard_${HazardKind}`;
+
 export interface SimEvent {
-  type: string;
+  type: SimEventType;
   x: number;
   y: number;
   /** wyrdling id or other integer payload */

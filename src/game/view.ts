@@ -2,18 +2,20 @@
 // shakes, popups). Purely presentational — never mutates the simulation.
 import * as THREE from 'three';
 import type { ArtBundle } from '../art/bundle';
-import type { RealmId } from '../art/types';
 import { Atlas, type FrameRef } from '../render/atlas';
 import { Background, LiquidLayer, Particles, canvasTex } from '../render/layers';
 import type { Pipeline } from '../render/pipeline';
 import { SpriteBatch, type SpriteOpts } from '../render/spriteBatch';
 import { TerrainLayer } from '../render/terrainLayer';
-import { bossCore, bossPhase, magmaLevel, surfaceY } from '../sim/boss';
-import type { SkillId } from '../sim/constants';
-import type { Fate } from '../sim/foresight';
-import type { Sim } from '../sim/sim';
-import type { Hazard, SimEvent, Wyrd } from '../sim/state';
+import { SLAM_CRUSH, STONE_COOLDOWN, bossCore, bossPhase, magmaLevel, nextAttack, nextStone, surfaceY } from '../sim/boss';
+import { SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
+import { compareFates, type Fate, type FateDelta, type FateEnd, type FateKind, type Ghost } from '../sim/foresight';
+import type { RealmId } from '../sim/level';
+import { SPAWN_START, type Sim } from '../sim/sim';
+import type { Hazard, SimEvent, Wyrd, WyrdState } from '../sim/state';
 import { isAlive } from '../sim/state';
+import { CueReader, type Cue } from './sound';
+import { edgePin, threadMarks, type EdgeDir, type SafeRect } from './threads';
 
 export interface ViewInput {
   sim: Sim;
@@ -26,10 +28,93 @@ export interface ViewInput {
   branch: Fate | null;
   showForesight: boolean;
   rewinding: boolean;
+  /** Q or the touch button held: the branch looks further ahead */
+  projecting: boolean;
+  /** the pointer is a finger (for the look-ahead hint) */
+  touch: boolean;
+  /** the first-doom lesson: point at this skull (where Wyrdling `id` is foreseen to die) */
+  pointer?: { x: number; y: number; id: number } | null;
+  /** Skuld's Vision: where (and when, and which) callings happen */
+  marks?: MarkView[];
+  /** how many Wyrdlings a click at the pointer chooses between (×N over the aimed one when 2 or more) */
+  crowd?: number;
+  /** CSS px the HUD covers at each screen edge: a death under it is pinned clear of it */
+  safe?: Insets;
+  /** Clear Sight: only what the physics cares about (flat light, wiring, timers, terrain by class) */
+  clearSight?: boolean;
 }
 
-interface Popup { text: string; x: number; y: number; life: number; r: number; g: number; b: number }
+export interface Insets { top: number; bottom: number; left: number; right: number }
+
+/** A staged-Vision marker on the terrain: where a calling happens, a countdown to when, and maybe which. */
+export interface MarkView {
+  x: number;
+  y: number;
+  /** the Wyrdling it goes to (ringed once it is out) */
+  id: number;
+  /** the calling's name (tier 2 on), or null */
+  label: string | null;
+  /** whole seconds left before it happens; null once it has */
+  secs: number | null;
+  /** it has happened and the Vision granted it: the grant's popup rises where NOW would be, so only the ring stays */
+  granted: boolean;
+  /** what the calling will leave in the terrain (tier 3 on) */
+  ghost: Ghost | null;
+}
+
+/** A word rising from where something happened. `lift`: how far it has been pushed up out of the way of
+ *  newer popups (it only grows, so a stack never jumps back down). */
+interface Popup { text: string; x: number; y: number; life: number; lift: number; r: number; g: number; b: number }
+
+/** A popup's line height: 8 px glyphs, their shadow and a pixel between lines. */
+const POPUP_LINE = 10;
+/** Surtr's Herald is drawn this far left of where it stands: its cape trails right, and from the arena's
+ *  spot by the right edge it would run past the level (the view never shows beyond it). Its body, sword
+ *  and glow move together; the stones' beam still lands on its chest. */
+const HERALD_INSET = 10;
 interface TempLight { x: number; y: number; r: number; c: [number, number, number]; life: number; max: number }
+
+// Personality. Each fate gets a short, bloodless, slightly comic beat, and a Wyrdling reaching the gate a
+// cheer. Beats and speech bubbles are timed in simulation ticks from their event, so they keep pace with
+// fast-forward, freeze with pause and run backwards under Rewind; one whose tick is still to come (the
+// run was rewound past it) is dropped, since that future may not happen again.
+type BeatKind = 'burn' | 'drown' | 'crush' | 'fall' | 'fling' | 'cheer';
+const BEAT_TICKS: Record<BeatKind, number> = { burn: 27, drown: 30, crush: 26, fall: 24, fling: 26, cheer: 16 };
+const BEAT_OF: Record<string, BeatKind> = {
+  lava: 'burn', fire: 'burn', sweep: 'burn', magma: 'burn', meteor: 'burn', fireball: 'burn',
+  water: 'drown',
+  crusher: 'crush', slam: 'crush', boulder: 'crush', buried: 'crush',
+  fall: 'fall', void: 'fall', spikes: 'fall',
+  burrow: 'fling', venom: 'fling', icicle: 'fling',
+};
+interface Beat {
+  kind: BeatKind;
+  tick: number;
+  x: number;
+  y: number;
+  /** which way a fling flies (or a cheer faces) */
+  dir: 1 | -1;
+  /** fell out of the level: only its thread is seen, rising from the bottom edge */
+  out?: boolean;
+  /** drowned: the water's extent [x0, x1], which the floating hood keeps to */
+  pool?: [number, number];
+}
+/** cheer, by ticks since the gate: [frame, hop] (then the golden exit) */
+const CHEER: [number, number][] = [[0, 0], [0, 0], [1, -2], [1, -4], [2, -5], [2, -5], [1, -3], [3, 0]];
+
+/** A bark's visible half: a speech bubble over the Wyrdling (the accessibility twin of each voice). The
+ *  'mm' of a granted calling has none: the calling's name rising over the Wyrdling already says it, and a
+ *  bubble there would cover that name. */
+type EmoteKind = 'hup' | 'oh' | 'whee' | 'yay';
+interface Emote { kind: EmoteKind; id: number; tick: number; x: number; y: number }
+const EMOTE_TICKS = 24;
+const EMOTE_OF: Partial<Record<string, EmoteKind>> = { spawn: 'hup', saved: 'yay', teeter: 'oh', glide: 'whee' };
+
+const DYING: ReadonlySet<WyrdState> = new Set(['unravel', 'burn', 'drown']);
+/** a doomed Wyrdling cowers when Foresight has it dying within this many ticks */
+const COWER_TICKS = 30;
+/** how long a fatal fall starts with arms windmilling */
+const FLAIL_TICKS = 12;
 
 function hexRgb(h: string): [number, number, number] {
   const c = new THREE.Color(h);
@@ -61,6 +146,40 @@ export function setHood(id: string): void {
   hoodSuffix = id && id !== 'teal' ? `@${id}` : '';
 }
 let sharedLightTex: THREE.CanvasTexture | null = null;
+
+/** Fate colours (Settings → Fate colours): red / green, or blue / orange for colour-blind players. Both
+ *  draw the same patterns and glyphs, so a fate never reads by colour alone. */
+export type PaletteId = 'classic' | 'cvd';
+
+interface Palette {
+  /** threads: doomed, saved, still walking, the aimed Wyrdling's own branch, others a calling changes for the better */
+  dead: Rgb; saved: Rgb; alive: Rgb; focus: Rgb; gain: Rgb;
+  /** the aim ring: a click would grant / would be refused */
+  ok: Rgb; no: Rgb;
+  /** words over the aimed Wyrdling */
+  good: Rgb; bad: Rgb; grim: Rgb;
+}
+
+const PALETTES: Record<PaletteId, Palette> = {
+  classic: {
+    dead: [1, 0.3, 0.25], saved: [0.6, 1, 0.55], alive: [1, 0.92, 0.7], focus: [1, 0.85, 0.3], gain: [0.7, 1, 0.6],
+    ok: [1, 0.95, 0.6], no: [1, 0.35, 0.3],
+    good: [0.6, 1, 0.6], bad: [1, 0.45, 0.4], grim: [0.85, 0.55, 0.5],
+  },
+  // blue and orange stay apart under deuteranopia, protanopia and tritanopia, and differ in lightness too (orange
+  // lighter), so even greyscale keeps them a step apart; the neutral is lighter than both
+  cvd: {
+    dead: [1, 0.6, 0.1], saved: [0.25, 0.55, 1], alive: [0.93, 0.93, 0.93], focus: [1, 0.95, 0.55], gain: [0.45, 0.75, 1],
+    ok: [0.55, 0.85, 1], no: [1, 0.55, 0.1],
+    good: [0.5, 0.78, 1], bad: [1, 0.62, 0.2], grim: [0.85, 0.66, 0.45],
+  },
+};
+
+let PAL: Palette = PALETTES.classic;
+
+export function setPalette(id: PaletteId): void {
+  PAL = PALETTES[id] ?? PALETTES.classic;
+}
 
 export function getAtlas(art: ArtBundle): Atlas {
   if (!sharedAtlas) sharedAtlas = new Atlas(art.sprites, art.font);
@@ -109,13 +228,30 @@ export class GameView {
   private crusherTops: number[] = [];
   shake = 0;
   flash: [number, number, number, number] = [1, 1, 1, 0];
+  private calmOn = false;
+  /** the last frame drew a sacrifice label ("1 lost · 3 saved later"), for the lesson that explains it */
+  sacrifice = false;
   private atmoT = 0;
+  /** Wyrdling id → its death beat or gate cheer */
+  private beats = new Map<number, Beat>();
+  private emotes: Emote[] = [];
+  private cues = new CueReader();
+  /** Wyrdling id → tick its fatal fall began */
+  private teeter = new Map<number, number>();
+  /** Wyrdling id → [tick, x] when last seen tumbling: a fatal landing just after is a fling */
+  private tumbling = new Map<number, [number, number]>();
+  /** the level's ambient light, given back when Clear Sight ends */
+  private ambient: [number, number, number];
+  /** Clear Sight is on: no light sprites, decor, parallax or particles; terrain shaded by class */
+  private clear = false;
+  /** the vignette Clear Sight set aside */
+  private vignette = 0;
 
   constructor(p: Pipeline, art: ArtBundle, sim: Sim) {
     this.p = p;
     this.art = art;
     this.atlas = getAtlas(art);
-    const realm = (sim.L.def.realm ?? 'midgard') as RealmId;
+    const realm = sim.L.def.realm;
     this.realm = realm;
     p.clearScenes();
     const v = p.view;
@@ -165,13 +301,15 @@ export class GameView {
     this.sparks = new Particles(v, 3000, true);
     this.sparks.points.renderOrder = 61;
     p.overlayScene.add(this.sparks.points);
-    this.over = new SpriteBatch(A.texture, A.size, v, 4096);
+    // patterned fate threads draw each mark on its own outline: 20 long threads need room
+    this.over = new SpriteBatch(A.texture, A.size, v, 8192);
     this.over.mesh.renderOrder = 70;
     p.overlayScene.add(this.over.mesh);
 
     const amb = bgSet.ambient;
     const lvlAmb = (sim.L.def as { ambient?: [number, number, number] }).ambient;
-    p.ambient.setRGB(...(lvlAmb ?? amb));
+    this.ambient = [...(lvlAmb ?? amb)];
+    p.ambient.setRGB(...this.ambient);
 
     // debris colours per material from the atlas params row
     const ctx = art.materials[realm].getContext('2d')!;
@@ -189,7 +327,17 @@ export class GameView {
     });
   }
 
+  /** Settings → Reduce motion: no screen shake, no flashes (the guardian's hurt strobe too), and a backdrop
+   *  that stays put while the camera moves. */
+  setCalm(on: boolean): void {
+    this.calmOn = on;
+    this.bg.setStill(on);
+    if (on) { this.shake = 0; this.flash[3] = 0; }
+  }
+
   dispose(): void {
+    // the pipeline outlives this view: give back the vignette Clear Sight set aside
+    this.setClear(false);
     this.terrain.dispose();
     this.bg.dispose();
     for (const l of this.liquids) l.dispose();
@@ -224,6 +372,8 @@ export class GameView {
   }
 
   private light(x: number, y: number, radius: number, r: number, g: number, b: number, k = 1): void {
+    // Clear Sight lights everything evenly (white ambient, no light sprites)
+    if (this.clear) return;
     const s = (radius * 2) / 64;
     this.lights.push({ x: 0, y: 0, w: 64, h: 64, ax: 32, ay: 32 }, x, y, { sx: s, sy: s, r: r * k, g: g * k, b: b * k, a: 1, smooth: true });
   }
@@ -232,6 +382,82 @@ export class GameView {
 
   handleEvents(events: SimEvent[], sim: Sim): void {
     for (const e of events) this.event(e, sim);
+    for (const c of this.cues.read(sim)) this.cue(c, sim);
+    for (const w of sim.d.wyrds) if (w.st === 'tumble') this.tumbling.set(w.id, [sim.d.tick, w.x]);
+  }
+
+  /** a speech bubble for Wyrdling `id` (one each; the oldest go first in a crowd) */
+  private emote(kind: EmoteKind, id: number, x: number, y: number, tick: number): void {
+    this.emotes = this.emotes.filter((m) => m.id !== id);
+    this.emotes.push({ kind, id, tick, x, y });
+    if (this.emotes.length > 8) this.emotes.shift();
+  }
+
+  private cue(c: Cue, sim: Sim): void {
+    const kind = EMOTE_OF[c.kind];
+    if (kind) this.emote(kind, c.id, c.x, c.y, sim.d.tick);
+    if (c.kind === 'teeter') this.teeter.set(c.id, sim.d.tick);
+    else if (c.kind === 'glide') this.burst(this.sparks, c.x, c.y - 10, 6, [0.55, 1, 0.7], 0.7, 18, 0);
+    else if (c.kind === 'climb') {
+      // grit scraped off the wall under the paws: the scrabble's visible half
+      const w = sim.d.wyrds[c.id];
+      const m = sim.terrain.get(c.x + w.dir * 2, c.y - 6) || 1;
+      const col = (this.debrisColors[m]?.[0] ?? [0.6, 0.5, 0.4]).map((v) => v + (1 - v) * 0.35);
+      for (let i = 0; i < 2; i++) this.debris.spawn(c.x + w.dir, c.y - 5 - i * 3, -w.dir * 0.3, 0.2, 30, col[0], col[1], col[2], 1, 1, 0.12, { collide: true });
+    }
+  }
+
+  /** The death beat for a cause, with its first particles. */
+  private deathBeat(e: SimEvent, sim: Sim): void {
+    const id = e.id ?? -1;
+    const w = sim.d.wyrds[id];
+    const tick = sim.d.tick;
+    const cause = e.s ?? '';
+    const flung = this.tumbling.get(id);
+    let kind = BEAT_OF[cause] ?? 'fall';
+    // thrown by a guardian and landing too hard: it bounces off in a tumble rather than unravelling where it lands
+    let dir: 1 | -1 = w?.dir ?? 1;
+    if (kind === 'fall' && flung && flung[0] < tick && tick - flung[0] <= 2) {
+      kind = 'fling';
+      dir = e.x < flung[1] ? -1 : e.x > flung[1] ? 1 : dir;
+    } else if (kind === 'fling') {
+      const b = sim.d.boss;
+      dir = b ? (e.x < b.x ? -1 : 1) : (-dir as 1 | -1);
+    }
+    let y = e.y, pool: [number, number] | undefined;
+    if (kind === 'drown' || cause === 'lava') {
+      // the liquid's surface, where the hood floats or the soot rises; the hood stays on the water
+      const l = sim.L.liquids.find((q) => e.x >= q.x && e.x < q.x + q.w && e.y >= q.y && e.y < q.y + q.h);
+      if (l) { y = l.y; pool = [l.x, l.x + l.w]; }
+    }
+    const out = cause === 'void';
+    this.beats.set(id, { kind, tick, x: e.x, y, dir, out, pool });
+    if (this.beats.size > 64) this.beats.delete(this.beats.keys().next().value!);
+    this.teeter.delete(id);
+    this.tumbling.delete(id);
+    if (out) return;
+    // dust in the ground's colour, paled so it shows against that ground
+    const g = this.debrisColors[sim.terrain.get(e.x, y + 1)]?.[0] ?? [0.6, 0.5, 0.4];
+    const dust = g.map((c) => c + (1 - c) * 0.45);
+    switch (kind) {
+      case 'burn':
+        for (let i = 0; i < 8; i++) this.sparks.spawn(e.x + (Math.random() - 0.5) * 8, y - 4 - Math.random() * 6, (Math.random() - 0.5) * 0.5, -0.4 - Math.random() * 0.6, 30 + Math.random() * 20, 1, 0.55, 0.2, 1, 1, -0.004, { drag: 0.97 });
+        break;
+      case 'drown':
+        for (let i = 0; i < 10; i++) this.debris.spawn(e.x + (Math.random() - 0.5) * 6, y - 1, (Math.random() - 0.5) * 1.6, -0.8 - Math.random() * 1.2, 22 + Math.random() * 10, 0.65, 0.88, 1, 1, 1, 0.12);
+        break;
+      case 'crush':
+      case 'fall':
+        // a dust puff, rolling out along the ground
+        for (let i = 0; i < 16; i++) {
+          const s = i % 2 ? 1 : -1;
+          this.debris.spawn(e.x + s * Math.random() * 3, y - 1 - Math.random() * 2, s * (0.4 + Math.random() * 0.9), -0.15 - Math.random() * 0.45, 22 + Math.random() * 14, dust[0], dust[1], dust[2], 0.9, Math.random() < 0.5 ? 2 : 1, 0.015, { drag: 0.94 });
+        }
+        break;
+      case 'fling':
+        this.burst(this.sparks, e.x, y - 6, 8, [1, 0.9, 0.6], 1.2, 16, 0);
+        break;
+    }
   }
 
   private burst(p: Particles, x: number, y: number, n: number, c: [number, number, number], speed: number, life: number, grav: number, size = 1, collide = false): void {
@@ -256,11 +482,20 @@ export class GameView {
   }
 
   private popup(text: string, x: number, y: number, c: [number, number, number] = [1, 0.9, 0.5]): void {
-    this.popups.push({ text, x, y, life: 50, r: c[0], g: c[1], b: c[2] });
+    // saves arriving together count up in one place ('+3') instead of a column of '+1's
+    const n = /^\+(\d+)$/.exec(text);
+    const same = n && this.popups.find((p) => /^\+\d+$/.test(p.text) && Math.abs(p.x - x) < 12 && p.life > 25);
+    if (n && same) {
+      Object.assign(same, { text: `+${Number(same.text.slice(1)) + Number(n[1])}`, y, life: 50, lift: 0 });
+      return;
+    }
+    this.popups.push({ text, x, y, life: 50, lift: 0, r: c[0], g: c[1], b: c[2] });
   }
 
   private event(e: SimEvent, sim: Sim): void {
     const GOLD: [number, number, number] = [1, 0.82, 0.35];
+    const emote = EMOTE_OF[e.type];
+    if (emote && e.id !== undefined) this.emote(emote, e.id, e.x, e.y, sim.d.tick);
     switch (e.type) {
       case 'spawn': this.burst(this.sparks, e.x, e.y - 4, 8, GOLD, 0.8, 30, 0); break;
       case 'assign': {
@@ -288,14 +523,10 @@ export class GameView {
         this.flash = [1, 0.85, 0.6, 0.22];
         break;
       }
-      case 'death': {
-        const cause = e.s ?? '';
-        const fire = cause === 'lava' || cause === 'fire' || cause === 'sweep' || cause === 'magma' || cause === 'meteor';
-        const c: [number, number, number] = fire ? [1, 0.5, 0.2] : cause === 'water' ? [0.6, 0.85, 1] : GOLD;
-        for (let i = 0; i < 12; i++) this.sparks.spawn(e.x + (Math.random() - 0.5) * 6, e.y - Math.random() * 10, (Math.random() - 0.5) * 0.5, -0.3 - Math.random() * 0.6, 50 + Math.random() * 30, c[0], c[1], c[2], 0.9, 1, -0.004, { drag: 0.98 });
-        break;
-      }
+      case 'death': this.deathBeat(e, sim); break;
       case 'saved': {
+        const w = e.id !== undefined ? sim.d.wyrds[e.id] : undefined;
+        if (w) this.beats.set(w.id, { kind: 'cheer', tick: sim.d.tick, x: e.x, y: w.y, dir: w.dir });
         this.burst(this.sparks, e.x, e.y - 8, 18, GOLD, 1.4, 35, 0.01);
         this.popup('+1', e.x, e.y - 30, [0.7, 1, 0.6]);
         this.tempLights.push({ x: e.x, y: e.y - 12, r: 40, c: [1, 0.9, 0.5], life: 20, max: 20 });
@@ -328,7 +559,6 @@ export class GameView {
       case 'clink': this.burst(this.sparks, e.x, e.y, 6, [1, 1, 0.8], 1.2, 12, 0.05); break;
       case 'crusher_break': this.burst(this.sparks, e.x, e.y, 40, [1, 0.75, 0.35], 2.4, 30, 0.08, 1); this.matDebris(sim, e.x, e.y, 16, 2); this.shake = Math.max(this.shake, 6); this.popup('WRECKED!', e.x, e.y - 20, [1, 0.7, 0.3]); break;
       case 'bowled': this.burst(this.debris, e.x, e.y, 6, [0.8, 0.7, 0.6], 1, 20, 0.1, 1, true); break;
-      case 'quota_met': this.popup('QUOTA MET!', e.x, e.y - 44, [0.6, 1, 0.6]); break;
       case 'land': this.burst(this.debris, e.x, e.y, 4, this.debrisColors[sim.terrain.get(e.x, e.y + 1)]?.[0] ?? [0.6, 0.5, 0.4], 0.6, 20, 0.08, 1, true); break;
     }
   }
@@ -337,25 +567,33 @@ export class GameView {
 
   draw(inp: ViewInput): void {
     const { sim, time } = inp;
+    this.setClear(!!inp.clearSight);
     this.terrain.sync(sim.terrain);
     this.terrain.setTime(time);
     this.bg.setTime(time);
     for (let i = 0; i < this.liquids.length; i++) this.liquids[i].set(sim.L.liquids[i], time);
 
-    // decay effects
+    // decay effects (calm: none at all; event handlers set them freely and they end here)
     this.shake *= Math.pow(0.86, inp.dt);
-    if (this.shake < 0.2) this.shake = 0;
+    if (this.shake < 0.2 || this.calmOn) this.shake = 0;
     this.flash[3] *= Math.pow(0.85, inp.dt);
-    if (this.flash[3] < 0.01) this.flash[3] = 0;
+    if (this.flash[3] < 0.01 || this.calmOn) this.flash[3] = 0;
 
     for (const b of [this.behind, this.ents, this.actors, this.front, this.lights, this.glow, this.over]) b.begin();
 
+    // first in the overlay, so threads, markers and popups stay on top of it
+    if (this.clear) this.drawClearSight(sim, time);
     this.drawEntities(sim, time);
     this.drawBodies(sim);
     this.drawBoss(sim, time);
+    this.drawBeats(sim);
     this.drawWyrds(sim, inp);
+    this.drawEmotes(sim);
     this.drawHazards(sim, time);
+    this.sacrifice = false;
     if (inp.showForesight && !inp.rewinding) this.drawForesight(sim, inp);
+    if (inp.pointer) this.drawPointer(sim, inp.pointer, inp.time, inp.safe);
+    if (inp.marks) for (const m of inp.marks) this.drawMark(sim, m, inp.time);
     this.drawPopups(inp.dt);
     this.atmosphere(sim, inp.dt);
 
@@ -373,14 +611,147 @@ export class GameView {
     for (const b of [this.behind, this.ents, this.actors, this.front, this.lights, this.glow, this.over]) b.end();
   }
 
+  /** Clear Sight on or off: flat light, no backdrop or particles, terrain shaded by class. */
+  private setClear(on: boolean): void {
+    if (on === this.clear) return;
+    this.clear = on;
+    this.terrain.setClear(on);
+    // sky and parallax go too: all air is the same flat black
+    for (const m of this.bg.meshes) m.visible = !on;
+    this.debris.points.visible = !on;
+    this.sparks.points.visible = !on;
+    // with no light sprites drawn, a white ambient leaves every pixel at full light
+    if (on) this.p.ambient.setRGB(1, 1, 1);
+    else this.p.ambient.setRGB(...this.ambient);
+    if (on) { this.vignette = this.p.post.vignette; this.p.post.vignette = 0; }
+    else this.p.post.vignette = this.vignette;
+  }
+
+  /**
+   * Clear Sight's overlay, the hidden information the art can bury: where a Wyrdling dies (liquids,
+   * spikes, fire jets) tinted red; wiring from each plate and lever to the gates and fire jets it drives,
+   * lit and flowing while it is on; each fire jet's cycle with the seconds to its next change; and at the
+   * entrance how many are still to come and when the next one drops.
+   */
+  private drawClearSight(sim: Sim, time: number): void {
+    const O = this.over, W = this.atlas.white, L = sim.L, d = sim.d, tick = d.tick;
+    const HAZ: Rgb = [1, 0.25, 0.2];
+    // liquids: the deadly box (2 px under the surface down, see Sim.liquidAt), over open air only
+    for (const l of L.liquids) {
+      for (let x = l.x; x < l.x + l.w; x++) {
+        for (let y = l.y + 2; y < l.y + l.h;) {
+          if (sim.terrain.get(x, y) !== 0) { y++; continue; }
+          let y1 = y;
+          while (y1 < l.y + l.h && sim.terrain.get(x, y1) === 0) y1++;
+          O.rect(W, x, y, 1, y1 - y, HAZ[0], HAZ[1], HAZ[2], 0.35);
+          y = y1;
+        }
+      }
+      for (let x = l.x; x < l.x + l.w; x += 4) if (sim.terrain.get(x, l.y + 2) === 0) O.rect(W, x, l.y + 2, 2, 1, HAZ[0], HAZ[1], HAZ[2], 0.9);
+    }
+    for (const s of L.spikes) O.rect(W, s.x, s.y - 5, s.w, 6, HAZ[0], HAZ[1], HAZ[2], 0.45);
+    // gates: their whole box, so an open gate still shows where it closes
+    L.gates.forEach((g) => this.dashBox(g.x, g.y, g.w, g.h, [0.55, 0.7, 1], 0.8));
+    // wiring, routed over the top: up from the switch, across, down onto what it drives
+    const WIRE_ON: Rgb = [0.45, 1, 0.95], WIRE_OFF: Rgb = [0.4, 0.55, 0.62];
+    type Source = { x: number; y: number; on: boolean };
+    const plate = (i: number): Source => ({ x: Math.round(L.plates[i].x + L.plates[i].w / 2), y: L.plates[i].y - 2, on: d.plates[i] });
+    const lever = (i: number): Source => ({ x: L.levers[i].x, y: L.levers[i].y - 8, on: d.levers[i] });
+    const source = (id: string): Source | null => {
+      const pi = L.plates.findIndex((p) => p.id === id);
+      if (pi >= 0) return plate(pi);
+      const li = L.levers.findIndex((l) => l.id === id);
+      return li >= 0 ? lever(li) : null;
+    };
+    const wire = (s: Source, tx: number, ty: number): number => {
+      // the bus runs clear over the heads of Wyrdlings walking at either end
+      const bus = Math.max(4, Math.min(s.y, ty) - 18);
+      const c = s.on ? WIRE_ON : WIRE_OFF;
+      this.wirePath([[s.x, s.y], [s.x, bus], [tx, bus], [tx, ty]], c, s.on ? Math.floor(time * 16) : 0);
+      O.rect(W, s.x - 1, s.y - 1, 3, 3, c[0], c[1], c[2], 1);
+      return bus;
+    };
+    L.gates.forEach((g, i) => {
+      if (!g.links.length) return;
+      const gx = Math.round(g.x + g.w / 2);
+      let bus = Infinity, on = 0;
+      for (const l of g.links) {
+        const s = l.kind === 'plate' ? plate(l.idx) : lever(l.idx);
+        bus = Math.min(bus, wire(s, gx, g.y - 2));
+        if (s.on) on++;
+      }
+      this.arrowTip(gx, g.y - 2, d.gates[i].open > 0 ? WIRE_ON : WIRE_OFF);
+      // the gate's logic, where it is not just "this switch opens it"
+      const n = g.links.length;
+      const label = `${g.invert ? 'NOT ' : ''}${n > 1 ? `${g.mode === 'all' ? 'ALL' : 'ANY'} ${on}/${n}` : ''}`.trim();
+      if (label) this.text(O, label, gx, bus - 10, WIRE_ON[0], WIRE_ON[1], WIRE_ON[2], 1);
+    });
+    // fire jets: the deadly column, its cycle, and the switch that cuts its gas
+    L.firejets.forEach((f, i) => {
+      const st = sim.firejetState(i);
+      const cut = !!f.links?.some((id) => sim.linkOn(id));
+      // (the wire stops above the cycle bar and its seconds)
+      for (const id of f.links ?? []) { const s = source(id); if (s) wire(s, f.x, f.y - f.h - 19); }
+      if (st === 2) O.rect(W, f.x - 5, f.y - f.h, 11, f.h, HAZ[0], HAZ[1], HAZ[2], 0.4);
+      else this.dashBox(f.x - 5, f.y - f.h, 11, f.h, st === 1 ? [1, 0.6, 0.25] : HAZ, 0.7);
+      const P = f.on + f.off, cyc = (tick + (f.phase ?? 0)) % P, BW = 22, bx = f.x - (BW >> 1), by = f.y - f.h - 6;
+      O.rect(W, bx - 1, by - 1, BW + 2, 4, 0.05, 0.03, 0.08, 0.85);
+      O.rect(W, bx, by, BW, 2, 0.35, 0.33, 0.38, 1);
+      O.rect(W, bx, by, Math.max(1, Math.round((f.on / P) * BW)), 2, HAZ[0], HAZ[1], HAZ[2], cut ? 0.35 : 1);
+      if (cut) { this.text(O, 'OFF', f.x, by - 10, WIRE_ON[0], WIRE_ON[1], WIRE_ON[2], 1); return; }
+      const warn = Math.round(((P - 15) / P) * BW);
+      O.rect(W, bx + warn, by, BW - warn, 2, 1, 0.6, 0.25, 1);
+      O.rect(W, bx + Math.min(BW - 1, Math.floor((cyc / P) * BW)), by - 1, 1, 4, 1, 1, 1, 1);
+      const left = st === 2 ? f.on - cyc : P - cyc;
+      this.text(O, (left / TICK_RATE).toFixed(1), f.x, by - 10, st === 2 ? 1 : 0.95, st === 2 ? 0.45 : 0.9, st === 2 ? 0.35 : 0.8, 1);
+    });
+    // the entrance: still to come, and the seconds to the next drop (a Wyrdling every `rate` ticks from SPAWN_START)
+    const en = L.entrance, toCome = L.def.wyrdlings - d.spawned;
+    let next = 0;
+    if (toCome > 0) next = tick < SPAWN_START ? SPAWN_START - tick : (L.def.rate - ((tick - SPAWN_START) % L.def.rate)) % L.def.rate;
+    this.text(O, toCome > 0 ? `${toCome} to come` : 'all out', en.x, en.y - 34, 1, 0.92, 0.7, 1);
+    if (toCome > 0) this.text(O, `next ${(next / TICK_RATE).toFixed(1)}s`, en.x, en.y - 25, 0.8, 0.85, 0.9, 1);
+  }
+
+  /** A 1 px dashed outline round a box (the dashes 2 on, 2 off), on a dark shadow. */
+  private dashBox(x: number, y: number, w: number, h: number, c: Rgb, a: number): void {
+    const x1 = x + w, y1 = y + h;
+    this.wirePath([[x - 1, y - 1], [x1, y - 1], [x1, y1], [x - 1, y1], [x - 1, y - 1]], c, 0, a);
+  }
+
+  /** A dashed path along horizontal and vertical legs; the dashes move forward as `phase` grows. */
+  private wirePath(pts: [number, number][], c: Rgb, phase: number, a = 1): void {
+    const O = this.over, W = this.atlas.white;
+    let k = -phase;
+    for (let i = 1; i < pts.length; i++) {
+      const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+      const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)), sx = Math.sign(x1 - x0), sy = Math.sign(y1 - y0);
+      for (let j = 0; j < n; j++, k++) {
+        if ((((k % 4) + 4) % 4) >= 2) continue;
+        const x = x0 + sx * j, y = y0 + sy * j;
+        O.rect(W, x + 1, y + 1, 1, 1, 0.05, 0.03, 0.08, 0.8 * a);
+        O.rect(W, x, y, 1, 1, c[0], c[1], c[2], a);
+      }
+    }
+  }
+
+  /** A small arrowhead pointing down, its tip at (x, y). */
+  private arrowTip(x: number, y: number, c: Rgb): void {
+    for (const [dy, w] of [[-2, 5], [-1, 3], [0, 1]] as const) this.over.rect(this.atlas.white, x - (w >> 1), y + dy, w, 1, c[0], c[1], c[2], 1);
+  }
+
   private drawEntities(sim: Sim, time: number): void {
     const L = sim.L, tick = sim.d.tick, E = this.ents;
     const def = L.def;
     // decor + level lights
     for (const e of def.entities) {
       if (e.type === 'decor') {
+        if (this.clear) continue;
         const n = this.frames(e.sprite);
-        E.push(this.f(e.sprite, Math.floor(time * 8) % Math.max(1, n)), e.x, e.y, { flip: e.flip });
+        // the mushroom's two frames are two kinds, not an animation (it flickered between them); the red cap
+        // looked like a doomed thread on the grass, so only the tan cluster grows
+        const i = e.sprite === 'mushroom' ? 1 : Math.floor(time * 8) % Math.max(1, n);
+        E.push(this.f(e.sprite, i), e.x, e.y, { flip: e.flip });
         if (e.sprite === 'torch' || e.sprite === 'brazier') {
           const fl = 0.85 + 0.15 * Math.sin(time * 13 + e.x) * Math.sin(time * 7.3 + e.y);
           this.light(e.x, e.y - 12, 70, 1.0, 0.62, 0.3, fl);
@@ -423,6 +794,32 @@ export class GameView {
       const on = sim.ventOn(v);
       for (let x = v.x; x < v.x + v.w; x += 16) E.push(this.f('vent', on ? Math.floor(time * 16) : 0), x + 8, v.y);
       if (on && Math.random() < 0.6 * (v.w / 16)) this.sparks.spawn(v.x + Math.random() * v.w, v.y - 4, 0, -1.2 - Math.random() * 0.8, v.h / 1.6, 0.6, 0.8, 1, 0.35, 1, 0, { drag: 1 });
+      if (!on) continue;
+      // the whole column, not only its grate, must read as rising air: a haze over the open air in it,
+      // fading upwards in bands, and streaks rising with their bright heads leading
+      const W = this.atlas.white, dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
+      const top = v.y - v.h, BANDS = 5;
+      const air = (x: number, y: number) => sim.terrain.get(x, y) === 0;
+      // band b's lower edge in column x, ragged rather than ruled
+      const edge = (x: number, b: number) => b === 0 ? v.y : b === BANDS ? top : Math.round(v.y - (v.h * b) / BANDS) + ((x * 7) % 9) - 4;
+      for (let x = v.x; x < v.x + v.w; x += 2) {
+        let lo = v.y;
+        while (lo > top && !air(x, lo)) lo--; // up from the grate, or the slope over it, to the open air
+        let hi = lo;
+        while (hi > top && air(x, hi)) hi--; // and on up to the rock above, or the column's top
+        for (let b = 0; b < BANDS; b++) {
+          const y0 = Math.max(hi, edge(x, b + 1)), y1 = Math.min(lo, edge(x, b));
+          if (y1 > y0) this.glow.push(dot, x, y0, { sx: 2, sy: y1 - y0, r: 0.7, g: 0.8, b: 1, a: 0.1 * (1 - b / BANDS) });
+        }
+      }
+      for (let x = v.x + 5; x < v.x + v.w; x += 11) {
+        const len = 6 + ((x * 37) % 7);
+        const y = v.y - ((time * 40 + x * 23) % v.h);
+        if (!air(x, y) || !air(x, y - len - 2)) continue;
+        const k = Math.max(0, Math.min(1, (v.y - y) / 20, (y - len - top) / 30)); // fade in at the grate, out at the top
+        this.glow.push(dot, x, y - len, { sy: len, r: 0.7, g: 0.85, b: 1, a: 0.15 * k });
+        this.glow.push(dot, x, y - len - 2, { sy: 2, r: 0.85, g: 0.95, b: 1, a: 0.5 * k });
+      }
     }
     // spikes
     for (const s of L.spikes) for (let x = s.x; x < s.x + s.w; x += 8) E.push(this.f('spikes'), x, s.y);
@@ -459,8 +856,9 @@ export class GameView {
       this.light(L.spindle.x, L.spindle.y - 6, 40, 1, 0.85, 0.4, 0.9);
       if (Math.random() < 0.15) this.sparks.spawn(L.spindle.x + (Math.random() - 0.5) * 10, L.spindle.y - 6 + (Math.random() - 0.5) * 10, 0, -0.2, 30, 1, 0.9, 0.4, 1, 1, 0);
     }
-    // seidr stones
+    // seidr stones: the lit one, and the one that lights next (the order is fixed, so it is shown in advance)
     const boss = sim.d.boss;
+    const next = boss && L.def.boss ? nextStone(boss, L.def.boss, L.seidr.length) : -1;
     L.seidr.forEach((s, i) => {
       const on = boss && boss.hp > 0 && boss.stone === i;
       E.push(this.f(on ? 'seidr.on' : 'seidr.off', Math.floor(time * 8)), s.x, s.y + 1);
@@ -469,6 +867,13 @@ export class GameView {
         if (Math.random() < 0.4) this.sparks.spawn(s.x + (Math.random() - 0.5) * 14, s.y - 2, 0, -0.5 - Math.random() * 0.5, 40, 0.4, 1, 0.95, 1, 1, 0);
         // a pulsing guide arrow above the active stone
         this.text(this.over, 'v', s.x, s.y - 24 + Math.round(Math.sin(time * 5) * 2), 0.5, 1, 0.95, 1);
+      } else if (i === next) {
+        // the next stone: a soft glow and a NEXT marker, brightening as it is about to light
+        const soon = boss!.stone < 0 ? Math.max(0, 1 - boss!.stoneCd / STONE_COOLDOWN) : 0;
+        const k = 0.75 + 0.15 * soon + 0.1 * Math.sin(time * 3);
+        this.light(s.x, s.y - 6, 40, 0.3, 0.8, 0.85, 0.5 + 0.4 * soon);
+        this.text(this.over, 'NEXT', s.x, s.y - 30, 0.55, 0.9, 0.9, k);
+        this.text(this.over, 'v', s.x, s.y - 22, 0.55, 0.9, 0.9, k);
       }
     });
     // rune charges
@@ -522,39 +927,211 @@ export class GameView {
     }
   }
 
+  /** Small life on top of the state's own animation: a doomed Wyrdling cowers, a fatal fall starts in a
+   *  flail, and a waiting one fidgets. Null: the plain animation. */
+  private reaction(w: Wyrd, tick: number, inp: ViewInput): { key: string; i: number; dx: number; dy: number; turn?: boolean } | null {
+    const g = tick + w.id * 3;
+    if (w.st === 'fall') {
+      const t0 = this.teeter.get(w.id);
+      return t0 !== undefined && tick - t0 >= 0 && tick - t0 < FLAIL_TICKS ? { key: 'wyrd.flail', i: (g >> 1) & 3, dx: 0, dy: 0 } : null;
+    }
+    if (w.st !== 'walk' && w.st !== 'wait') return null;
+    const fate = inp.fate, end = fate && !inp.rewinding ? fate.ends.get(w.id) : undefined;
+    if (fate && end?.kind === 'dead') {
+      const left = fate.from + end.t - tick;
+      if (left > 0 && left <= COWER_TICKS) return { key: 'wyrd.cower', i: (g >> 1) & 3, dx: 0, dy: 0 };
+    }
+    if (w.st !== 'wait') return null;
+    // A calm stand with a blink, then one small fidget, each Wyrdling on its own clock and with its own
+    // habits. Waits behind a Weaver come in short spells, so the clock runs on through the walking between.
+    const k = tick + w.id * 23, cycle = Math.floor(k / 64), p = k % 64;
+    if (p < 24) return { key: 'wyrd.idle', i: p === 10 || p === 11 ? 1 : 0, dx: 0, dy: 0 };
+    switch ((cycle * 7 + w.id * 3) % 5) {
+      case 0: return { key: 'wyrd.idle', i: 2, dx: 0, dy: 0 };
+      case 1: return { key: 'wyrd.idle', i: 3 + ((p >> 2) & 1), dx: 0, dy: 0 };
+      case 2: return { key: 'wyrd.idle', i: 5, dx: 0, dy: 0 };
+      case 3: return { key: 'wyrd.idle', i: p >= 52 && p < 54 ? 1 : 0, dx: 0, dy: 0, turn: p < 52 };
+      default: return { key: 'wyrd.idle', i: p < 58 ? 6 : 0, dx: 0, dy: 0 };
+    }
+  }
+
   private drawWyrds(sim: Sim, inp: ViewInput): void {
     const tick = sim.d.tick;
+    const hw = inp.hover !== null ? sim.d.wyrds[inp.hover] : undefined;
+    const aimed = hw && isAlive(hw) ? hw : null;
     for (const w of sim.d.wyrds) {
-      if (w.st === 'gone') continue;
-      const an = this.wyrdAnim(w, tick);
-      const hovered = inp.hover === w.id;
-      const o: SpriteOpts = { flip: w.dir < 0 };
-      if (hovered && isAlive(w)) {
-        o.fr = 1; o.fg = 1; o.fb = 1; o.fa = 0.18 + 0.1 * Math.sin(inp.time * 10);
-      }
-      const key = hoodSuffix && this.atlas.has(an.key + hoodSuffix) ? an.key + hoodSuffix : an.key;
-      this.actors.push(this.f(key, an.i), w.x + an.dx, w.y + an.dy, o);
-      if (isAlive(w)) {
-        if (w.climber && w.glider) {
-          this.front.push(this.f('mark.climber'), w.x - 4, w.y - 14);
-          this.front.push(this.f('mark.glider'), w.x + 4, w.y - 14);
-        } else if (w.climber) this.front.push(this.f('mark.climber'), w.x, w.y - 14);
-        else if (w.glider) this.front.push(this.f('mark.glider'), w.x, w.y - 14);
-      }
-      if (w.st === 'warden' && (tick & 31) < 2) this.sparks.spawn(w.x + (Math.random() < 0.5 ? -5 : 5), w.y - 6, 0, -0.3, 20, 1, 0.9, 0.5, 1, 1, 0);
-      // a faint golden thread glint on each living wyrdling keeps them readable in dark caves
-      if (isAlive(w)) this.light(w.x, w.y - 6, 14, 0.5, 0.42, 0.25, 0.5);
+      if (w.st !== 'gone' && w !== aimed) this.drawWyrd(w, tick, null, inp);
     }
-    // hover ring
-    if (inp.hover !== null) {
-      const w = sim.d.wyrds[inp.hover];
-      if (w && isAlive(w)) {
-        const bad = inp.armed !== null && !inp.canAssign;
-        const ring = this.f('cursor.ring', Math.floor(inp.time * 10));
-        this.over.push(ring, w.x, w.y - 6, bad ? { r: 1, g: 0.35, b: 0.3 } : { r: 1, g: 0.95, b: 0.6 });
-        const label = stateLabel(w);
-        this.text(this.over, label, w.x, w.y - 28, bad ? 1 : 0.95, bad ? 0.55 : 0.95, bad ? 0.5 : 0.85, 0.95);
+    if (!aimed) return;
+    const w = aimed;
+    const bad = inp.armed !== null && !inp.canAssign;
+    const c = bad ? PAL.no : PAL.ok;
+    // the exact Wyrdling a click hits: drawn over its neighbours with an outline, so a crowd can't hide it
+    this.drawWyrd(w, tick, c, inp);
+    this.over.push(this.f('cursor.ring', Math.floor(inp.time * 10)), w.x, w.y - 6, { r: c[0], g: c[1], b: c[2] });
+    // a refusal says so in shape too, not only in colour (on the side the facing arrow leaves free)
+    if (bad) this.cross(w.x + (BUSY.has(w.st) && w.dir > 0 ? -7 : 7), w.y - 13, c);
+    // several under the pointer: how many a repeat tap or Tab cycles through
+    const n = inp.crowd ?? 0;
+    if (n > 1) {
+      const s = `×${n}`;
+      // left of the hood, under the calling's tag
+      this.text(this.over, s, w.x - 8 - this.textWidth(s), w.y - 20, c[0], c[1], c[2], 1, 'left');
+    }
+    // the tag names what a click would grant; a click that grants nothing gets no tag (the ring says why)
+    if (inp.armed !== null && inp.canAssign) this.text(this.over, SKILL_INFO[inp.armed].name, w.x, w.y - 28, 0.95, 0.95, 0.85, 0.95);
+  }
+
+  /** One Wyrdling; `outline` (the aimed one) rims its sprite in that colour. */
+  private drawWyrd(w: Wyrd, tick: number, outline: Rgb | null, inp: ViewInput): void {
+    // a death beat or a cheer at the gate draws this Wyrdling now
+    if ((DYING.has(w.st) || w.st === 'exit') && this.beats.has(w.id)) return;
+    const time = inp.time;
+    const re = this.reaction(w, tick, inp);
+    const an = re ?? this.wyrdAnim(w, tick);
+    const flip = re?.turn ? w.dir > 0 : w.dir < 0;
+    const key = hoodSuffix && this.atlas.has(an.key + hoodSuffix) ? an.key + hoodSuffix : an.key;
+    const fr = this.f(key, an.i), x = w.x + an.dx, y = w.y + an.dy;
+    const o: SpriteOpts = { flip };
+    if (outline) {
+      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) this.actors.push(fr, x + ox, y + oy, { flip, fr: outline[0], fg: outline[1], fb: outline[2], fa: 1 });
+      o.fr = 1; o.fg = 1; o.fb = 1; o.fa = 0.18 + 0.1 * Math.sin(time * 10);
+    }
+    this.actors.push(fr, x, y, o);
+    if (isAlive(w)) {
+      if (w.climber && w.glider) {
+        this.front.push(this.f('mark.climber'), w.x - 4, w.y - 14);
+        this.front.push(this.f('mark.glider'), w.x + 4, w.y - 14);
+      } else if (w.climber) this.front.push(this.f('mark.climber'), w.x, w.y - 14);
+      else if (w.glider) this.front.push(this.f('mark.glider'), w.x, w.y - 14);
+      // a working Wyrdling's pose barely shows which way it faces, yet that is where it goes next
+      if (BUSY.has(w.st)) this.facing(w);
+    }
+    if (w.st === 'warden' && (tick & 31) < 2) this.sparks.spawn(w.x + (Math.random() < 0.5 ? -5 : 5), w.y - 6, 0, -0.3, 20, 1, 0.9, 0.5, 1, 1, 0);
+    // a faint golden thread glint on each living wyrdling keeps them readable in dark caves
+    if (isAlive(w)) this.light(w.x, w.y - 6, 14, 0.5, 0.42, 0.25, 0.5);
+  }
+
+  /** A solid arrowhead beside a working Wyrdling at hood height (clear of its thread), pointing the way it faces. */
+  private facing(w: Wyrd): void {
+    const W = this.atlas.white, d = w.dir < 0 ? -1 : 1, y = w.y - 11;
+    for (let i = 0; i < 4; i++) { const h = 7 - 2 * i; this.front.rect(W, w.x + d * (6 + i) - 1, y - (h >> 1) - 1, 3, h + 2, RIM.r, RIM.g, RIM.b, 0.75); }
+    for (let i = 0; i < 4; i++) { const h = 7 - 2 * i; this.front.rect(W, w.x + d * (6 + i), y - (h >> 1), 1, h, 1, 0.95, 0.75, 1); }
+  }
+
+  /** A 5×5 X centred on (x, y), on a dark rim: "this click would be refused". */
+  private cross(x: number, y: number, c: Rgb): void {
+    const W = this.atlas.white;
+    const px: [number, number][] = [];
+    for (let i = -2; i <= 2; i++) { px.push([x + i, y + i]); if (i) px.push([x + i, y - i]); }
+    for (const [cx, cy] of px) this.over.rect(W, cx - 1, cy - 1, 3, 3, RIM.r, RIM.g, RIM.b, 0.85);
+    for (const [cx, cy] of px) this.over.rect(W, cx, cy, 1, 1, c[0], c[1], c[2], 1);
+  }
+
+  /** The death beats and gate cheers, by ticks since they began. */
+  private drawBeats(sim: Sim): void {
+    const tick = sim.d.tick, A = this.actors, W = this.atlas.white;
+    const dyed = (key: string) => (hoodSuffix && this.atlas.has(key + hoodSuffix) ? key + hoodSuffix : key);
+    const fadeFrom = (age: number, at: number, len: number) => (age < at ? 1 : Math.max(0, 1 - (age - at) / len));
+    for (const [id, b] of this.beats) {
+      const age = tick - b.tick;
+      if (age < 0) { this.beats.delete(id); continue; }
+      if (age >= BEAT_TICKS[b.kind]) continue;
+      const flip = b.dir < 0;
+      switch (b.kind) {
+        case 'cheer': {
+          // a hop with both arms up, then the golden fade into the gate. The hop is drawn unlit: in the
+          // gate's glare a lit teal hood melts into the teal portal behind it.
+          if (age < CHEER.length) {
+            const [i, dy] = CHEER[age];
+            this.over.push(this.f(dyed('wyrd.cheer'), i), b.x, b.y + dy, { flip });
+          } else A.push(this.f(dyed('wyrd.exit'), Math.min(7, age - CHEER.length + 1)), b.x, b.y, { flip });
+          break;
+        }
+        case 'burn': {
+          // catches, flares, and is a puff of soot that blinks twice before it drifts apart
+          if (age < 4) {
+            A.push(this.f(dyed('wyrd.burn'), Math.min(2, age)), b.x, b.y + 1, { flip });
+            this.light(b.x, b.y - 6, 34, 1.2, 0.5, 0.15, 1);
+            break;
+          }
+          const k = age - 4;
+          const frame = age >= 25 ? 3 : age >= 22 ? 2 : (k >= 8 && k < 10) || (k >= 14 && k < 16) ? 1 : 0;
+          // blown back off the flame, and drawn unlit: in a fire's glare a lit puff turns orange and loses its eyes
+          const x = b.x - b.dir * Math.min(7, k * 2) + Math.round(Math.sin(k * 0.45));
+          this.over.push(this.f('fx.soot', frame), x, b.y + 1 - Math.round(k * 0.3), { a: fadeFrom(age, 22, 6) });
+          if (k < 6) this.light(b.x, b.y - 4, 26, 1, 0.45, 0.15, 1 - k / 6);
+          break;
+        }
+        case 'drown': {
+          // goes under; the empty hood bobs up and floats a moment, then sinks with a bubble or two
+          if (age < 6) { A.push(this.f(dyed('wyrd.drown'), age), b.x, b.y + 2, { flip }); break; }
+          const k = age - 6, sink = Math.max(0, age - 24);
+          // drifting a little, but never off the water (a pool narrower than the hood holds it mid-pool)
+          const [p0, p1] = b.pool ?? [b.x - 99, b.x + 99];
+          const x = p1 - p0 >= 16 ? Math.max(p0 + 7, Math.min(p1 - 8, b.x + b.dir * Math.round(k * 0.15))) : Math.round((p0 + p1) / 2);
+          const bob = Math.round(Math.sin(k * 0.6) * 0.8);
+          A.push(this.f(dyed('wyrd.hood'), (k >> 3) & 1), x, b.y + 1 + bob + Math.round(sink * 0.8), {
+            flip, a: fadeFrom(age, 24, 6), r: sink ? 0.7 : 1, g: sink ? 0.85 : 1,
+          });
+          // rings spreading on the surface
+          if (k < 14) {
+            for (const s of [-1, 1]) {
+              const rx = x + s * (5 + (k >> 1)) - (s < 0 ? 1 : 0);
+              if (rx >= p0 && rx + 2 <= p1) A.rect(W, rx, b.y, 2, 1, 0.8, 0.95, 1, 0.8 * (1 - k / 14));
+            }
+          }
+          if (sink) for (let i = 0; i < 2; i++) A.rect(W, x - 1 + i * 3, b.y - 2 - ((sink + i * 2) % 5), 1, 1, 0.85, 0.97, 1, 0.9);
+          break;
+        }
+        case 'crush': {
+          // flattened, dazed (two motes circling), then it pops back up as a loose thread
+          if (age < 12) {
+            A.push(this.f(dyed('wyrd.flat'), (age >> 2) & 1), b.x, b.y, { flip });
+            for (const ph of [0, Math.PI]) {
+              const t = age * 0.55 + ph;
+              A.rect(W, Math.round(b.x + Math.cos(t) * 5), Math.round(b.y - 6 + Math.sin(t) * 1.5), 1, 1, 1, 0.95, 0.6, 1);
+            }
+            break;
+          }
+          const k = age - 12;
+          if (k < 3) A.push(this.f('fx.pop', k), b.x, b.y - 3);
+          A.push(this.f('fx.thread', (age >> 1) & 3), b.x, b.y - 1 - Math.round(k * 1.1), { a: fadeFrom(age, 20, 6) });
+          this.light(b.x, b.y - 8 - k, 22, 1, 0.8, 0.4, 0.7);
+          break;
+        }
+        case 'fall': {
+          // a fall out of the level shows only its thread, rising from the bottom edge
+          if (b.out) {
+            A.push(this.f('fx.thread', (age >> 1) & 3), b.x, sim.L.h - 1 - Math.round(age * 1.2), { a: fadeFrom(age, 16, 8) });
+            break;
+          }
+          // squashed by the landing, then the thread comes undone
+          if (age < 3) { A.push(this.f(dyed('wyrd.land'), 0), b.x, b.y, { flip }); break; }
+          A.push(this.f(dyed('wyrd.unravel'), Math.min(11, 1 + Math.floor(((age - 3) * 11) / 21))), b.x, b.y, { flip });
+          break;
+        }
+        case 'fling': {
+          // sent tumbling off in an arc, and gone with a pop
+          const t = Math.min(age, 20);
+          const x = Math.round(b.x + b.dir * 1.5 * t), y = Math.round(b.y - 4 - 3.2 * t + 0.11 * t * t);
+          if (age < 20) A.push(this.f(dyed('wyrd.tumble'), (age >> 1) & 3), x, y, { flip });
+          else A.push(this.f('fx.pop', Math.min(2, (age - 20) >> 1)), x, y - 6);
+          break;
+        }
       }
+    }
+  }
+
+  /** Speech bubbles over the Wyrdlings that spoke (they follow a living one). */
+  private drawEmotes(sim: Sim): void {
+    const tick = sim.d.tick;
+    this.emotes = this.emotes.filter((m) => tick >= m.tick && tick - m.tick < EMOTE_TICKS);
+    for (const m of this.emotes) {
+      const w = sim.d.wyrds[m.id];
+      if (w && isAlive(w)) { m.x = w.x; m.y = w.y; }
+      const age = tick - m.tick;
+      this.over.push(this.f(`emote.${m.kind}`), m.x + 3, m.y - 15 + Math.max(0, 2 - age), { a: Math.min(1, (EMOTE_TICKS - age) / 6) });
     }
   }
 
@@ -562,11 +1139,12 @@ export class GameView {
     const b = sim.d.boss;
     if (!b) return;
     const tick = sim.d.tick;
-    const flash: SpriteOpts = b.hurt > 0 && (b.hurt & 2) ? { fr: 1, fg: 1, fb: 1, fa: 0.7 } : {};
+    // hurt: a white strobe, or with Reduce motion one steady pale tint for as long as it lasts
+    const flash: SpriteOpts = b.hurt > 0 && (this.calmOn || (b.hurt & 2)) ? { fr: 1, fg: 1, fb: 1, fa: this.calmOn ? 0.35 : 0.7 } : {};
     const dying = b.hp <= 0;
     const fade = dying ? Math.max(0, 1 - b.dying / 90) : 1;
     if (fade <= 0) return;
-    const shakeX = dying ? Math.round(Math.sin(time * 50) * 3) : 0;
+    const shakeX = dying && !this.calmOn ? Math.round(Math.sin(time * 50) * 3) : 0;
     const phase = bossPhase(b);
     if (b.kind === 'wyrm') {
       const attacking = b.act === 'venom' && b.at >= 10;
@@ -599,13 +1177,14 @@ export class GameView {
     } else {
       const pose = b.hurt > 0 ? 'herald.body.hurt' : b.act === 'sweep' && b.at < 48 ? 'herald.body.raise' : 'herald.body.idle';
       const sway = Math.round(Math.sin(time * 1.2) * 2);
-      this.behind.push(this.f(pose, Math.floor(time * 2)), b.x + sway + shakeX, b.y + (dying ? b.dying * 0.8 : 0), { ...flash, flip: true, a: fade });
+      const x = b.x - HERALD_INSET;
+      this.behind.push(this.f(pose, Math.floor(time * 2)), x + sway + shakeX, b.y + (dying ? b.dying * 0.8 : 0), { ...flash, flip: true, a: fade });
       // resting sword
       if (!(b.act === 'sweep' && b.at >= 48)) {
         const rot = Math.PI * 0.62 + Math.sin(time * 1.3) * 0.05;
-        this.behind.push(this.f('herald.sword'), b.x - 34 + sway, b.y - 60, { rot, flip: false, smooth: true, a: fade });
+        this.behind.push(this.f('herald.sword'), x - 34 + sway, b.y - 60, { rot, flip: false, smooth: true, a: fade });
       }
-      this.light(b.x - 10, b.y - 70, 110, 1.3, 0.55, 0.2, 0.9 + 0.1 * Math.sin(time * 5));
+      this.light(x - 10, b.y - 70, 110, 1.3, 0.55, 0.2, 0.9 + 0.1 * Math.sin(time * 5));
     }
     void tick;
   }
@@ -658,6 +1237,33 @@ export class GameView {
       this.over.push(this.f('target', Math.floor(time * 10)), p.tx, p.ty - 3, { r: 1, g: 0.25, b: 0.2, a: 0.55 + 0.45 * blink });
     }
     for (const h of sim.d.hazards) this.drawHazard(sim, h, time, blink, W);
+    this.drawNextAttack(sim, time, W);
+  }
+
+  /** The attack rotation and its aims are fixed, so the next strike is marked faintly up to 5 s before its
+   *  own telegraph starts: its name over the ground it will reach. */
+  private drawNextAttack(sim: Sim, time: number, W: FrameRef): void {
+    const b = sim.d.boss, def = sim.L.def.boss;
+    const n = b && def ? nextAttack(b, def) : null;
+    if (!n || n.in > 150) return;
+    const a = (0.35 + 0.45 * (1 - n.in / 150)) * (0.8 + 0.2 * Math.sin(time * 4));
+    const ar = def!.arena, phase = bossPhase(b!);
+    let x0 = n.x, x1 = n.x;
+    switch (n.act) {
+      case 'venom': x0 -= phase ? 35 : 22; x1 += phase ? 35 : 22; break;
+      case 'burrow': x0 -= 11; x1 += 11; break;
+      case 'lash': x1 = ar.x1; if (!def!.aim?.lash?.length) x0 = ar.x0; break;
+      case 'icicles': x0 -= phase ? 55 : 43; x1 += phase ? 55 : 43; break;
+      case 'breath': x0 -= phase === 2 ? 55 : 40; x1 += phase === 2 ? 55 : 40; break;
+      case 'slam': x0 -= SLAM_CRUSH; x1 += SLAM_CRUSH; break;
+      case 'sweep': x0 = Math.max(ar.x0, Math.min(ar.x1 - 180, n.x - 90)); x1 = x0 + 180; break;
+      case 'magma': x0 = ar.x0; x1 = ar.x1; break;
+      case 'meteors': x0 -= phase ? 39 : 24; x1 += phase ? 39 : 24; break;
+    }
+    const y = n.act === 'magma' || n.act === 'lash' || n.act === 'sweep' ? ar.floorY : surfaceY(sim, Math.round(n.x), ar.floorY - 140);
+    for (let x = x0; x < x1; x += 6) this.over.rect(W, x, y + 1, 3, 1, 1, 0.3, 0.25, a);
+    // under the line, clear of the stone markers above the ground
+    this.text(this.over, n.act.toUpperCase(), (x0 + x1) / 2, y + 4, 1, 0.45, 0.35, a);
   }
 
   private drawHazard(sim: Sim, h: Hazard, time: number, blink: number, W: FrameRef): void {
@@ -733,13 +1339,16 @@ export class GameView {
         };
         if (warn) {
           const k = h.t / h.warn;
-          const r = 12 + (1 - k) * 10;
+          const r = SLAM_CRUSH + (1 - k) * 8;
+          // the ground the fist will crush
+          O.rect(W, h.x0 - SLAM_CRUSH, h.y0 - 16, SLAM_CRUSH * 2 + 1, 18, ...red(0.1 + 0.2 * blink * k));
           O.push(this.f('target', Math.floor(time * 12)), h.x0, h.y0 - 3, { r: 1, g: 0.3, b: 0.25, sx: r / 7, sy: r / 14, smooth: true });
           arm(hidden + (h.y0 - hidden) * k * k - 2 * (1 - k));
           if (h.t < 6 && Math.random() < 0.6) this.matDebris(sim, h.x0 + (Math.random() - 0.5) * 20, ceil + 2, 2, 1);
         } else {
           const k = h.t - h.warn;
-          if (k < 22) { const e = Math.max(0, (k - 8) / 14); arm(h.y0 + (hidden - h.y0) * e * e); }
+          // (the fallen giant's last quake has no fist)
+          if (k < 22 && h.warn > 0) { const e = Math.max(0, (k - 8) / 14); arm(h.y0 + (hidden - h.y0) * e * e); }
           for (const s of [-1, 1]) {
             const x = h.x0 + s * h.p;
             if (k < h.dur) for (let i = 0; i < 3; i++) this.sparks.spawn(x, h.y0 - Math.random() * 6, s * 0.3, -0.5 - Math.random(), 16, 0.8, 0.95, 1, 0.9, 1, 0.05);
@@ -781,78 +1390,281 @@ export class GameView {
 
   private drawForesight(sim: Sim, inp: ViewInput): void {
     const O = this.over;
-    const W = this.atlas.white;
-    const dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
-    const fate = inp.fate, branch = inp.branch;
-    const phase = (inp.time * 30) % 4;
-    const drawPath = (pts: number[], r: number, g: number, b: number, a: number, every: number) => {
-      const n = pts.length / 2;
-      for (let i = 1; i < n; i++) {
-        if ((i + Math.floor(phase)) % every !== 0) continue;
-        const fade = 1 - i / n;
-        const x = Math.round(pts[i * 2]), y = Math.round(pts[i * 2 + 1] - 5);
-        // a dark under-dot keeps the thread readable on bright terrain
-        O.push(dot, x, y + 1, { r: 0.05, g: 0.03, b: 0.08, a: a * 0.6 * (0.35 + 0.65 * fade), sx: 2, sy: 2 });
-        O.push(dot, x, y, { r, g, b, a: a * (0.45 + 0.55 * fade), sx: 2, sy: 2 });
-      }
-    };
-    const endMarker = (id: number, f: Fate, bright: boolean) => {
-      const e = f.ends.get(id);
+    const fate = inp.fate;
+    // a branch belongs to one Wyrdling and calling; while the next one computes, the last stays hidden
+    const branch = inp.branch && inp.hover !== null && inp.branch.focus === inp.hover && inp.branch.skill === inp.armed ? inp.branch : null;
+    // what the branch is judged against: its own shadow run when it looks past the base horizon
+    const baseline = branch?.shadow ?? fate;
+    // each pattern flows along its thread, from the Wyrdling towards its end
+    const march = inp.time * 10;
+    const safe = this.safeRect(inp.safe);
+    const pins: Pin[] = [];
+    const endMarker = (e: FateEnd | undefined, bright: boolean) => {
       if (!e) return;
-      if (e.kind === 'dead') O.push(this.f('skull'), e.x, e.y - 5, { a: bright ? 1 : 0.75 });
-      else if (e.kind === 'saved') O.push(this.f('spark'), e.x, e.y - 8, { a: bright ? 1 : 0.75 });
+      const a = bright ? 1 : 0.8;
+      if (e.kind === 'dead') {
+        // a death past the screen's edge or under the HUD is pinned where it can be seen
+        const pin = edgePin(e.x, e.y - 5, safe);
+        if (pin) pins.push({ ...pin, a });
+        else O.push(this.f('skull'), e.x, e.y - 5, { a });
+      } else if (e.kind === 'saved') O.push(this.f('spark'), e.x, e.y - 8, { a });
     };
     if (fate) {
-      for (const [id, pts] of fate.paths) {
-        const e = fate.ends.get(id);
-        const focus = branch && inp.hover === id;
-        if (focus) continue;
-        const dead = e?.kind === 'dead';
-        const saved = e?.kind === 'saved';
-        const changed = branch && branch.ends.get(id)?.kind !== e?.kind;
-        if (changed) continue;
-        const [r, g, b] = dead ? [1, 0.3, 0.25] : saved ? [0.6, 1, 0.55] : [1, 0.92, 0.7];
-        drawPath(pts, r, g, b, dead ? 0.9 : 0.55, dead ? 2 : 3);
-        endMarker(id, fate, false);
+      // threads on the same floor overlap: the doomed go on top
+      for (const order of DRAW_ORDER) {
+        for (const [id, pts] of fate.paths) {
+          const e = fate.ends.get(id);
+          const kind = e?.kind ?? 'alive';
+          if (kind !== order || (branch && inp.hover === id)) continue;
+          const changed = branch && branch.ends.get(id)?.kind !== baseline?.ends.get(id)?.kind;
+          if (changed) continue;
+          this.thread(pts, kind, kind === 'dead' ? PAL.dead : kind === 'saved' ? PAL.saved : PAL.alive, kind === 'alive' ? 0.7 : 0.95, march);
+          endMarker(e, false);
+        }
       }
       // boulders
-      for (const [, pts] of fate.bodies) drawPath(pts, 0.85, 0.75, 0.6, 0.45, 4);
+      for (const [, pts] of fate.bodies) this.thread(pts, 'alive', [0.85, 0.75, 0.6], 0.5, march);
       // predicted blasts
       for (let i = 0; i < fate.blasts.length; i += 4) {
         O.push(this.f('target', Math.floor(inp.time * 10)), fate.blasts[i], fate.blasts[i + 1], { r: 1, g: 0.6, b: 0.2, a: 0.6, sx: fate.blasts[i + 3] / 7, sy: fate.blasts[i + 3] / 7, smooth: true });
       }
     }
-    if (branch && inp.hover !== null) {
+    if (branch) {
+      if (branch.ghost) this.drawGhost(branch.ghost, inp.time);
       for (const [id, pts] of branch.paths) {
         const e = branch.ends.get(id);
-        const base = fate?.ends.get(id);
+        const base = baseline?.ends.get(id);
         const focus = inp.hover === id;
         if (!focus && base && e && base.kind === e.kind) continue;
-        const dead = e?.kind === 'dead';
-        const [r, g, b] = dead ? [1, 0.35, 0.3] : focus ? [1, 0.85, 0.3] : [0.7, 1, 0.6];
-        drawPath(pts, r, g, b, 1, 2);
-        endMarker(id, branch, true);
+        const kind = e?.kind ?? 'alive';
+        // a projection's other threads stop at the usual horizon, but where a changed fate ends still shows
+        this.thread(pts, kind, kind === 'dead' ? PAL.dead : focus ? PAL.focus : PAL.gain, 1, march);
+        endMarker(e, true);
       }
-      if (fate) {
-        const ds = branch.saved - fate.saved, dd = branch.dead - fate.dead;
-        const w = sim.d.wyrds[inp.hover];
-        if (w) {
-          const parts: string[] = [];
-          if (ds !== 0) parts.push(`${ds > 0 ? '+' : ''}${ds} saved`);
-          if (dd !== 0) parts.push(`${dd > 0 ? '+' : ''}${dd} lost`);
-          if (parts.length) {
-            const good = ds >= 0 && dd <= 0;
-            this.text(O, parts.join(' '), w.x, w.y - 38, good ? 0.6 : 1, good ? 1 : 0.45, good ? 0.6 : 0.4, 1);
-          }
-        }
+    }
+    this.drawPins(pins);
+    // the hovered Wyrdling: its own end in words, then what the calling changes for everyone
+    const w = inp.hover !== null ? sim.d.wyrds[inp.hover] : undefined;
+    if (!w || !isAlive(w)) return;
+    const rows: Seg[][] = [];
+    const own = (branch ?? fate)?.ends.get(w.id);
+    if (own) {
+      const [s, c] = endWords(own);
+      rows.push([{ s, c }]);
+    }
+    if (branch) {
+      if (baseline) {
+        const d = compareFates(baseline, branch);
+        if (isSacrifice(d)) this.sacrifice = true;
+        rows.push(deltaWords(d));
+      }
+      if (branch.skill && sim.d.skills[branch.skill] === 1) rows.push([{ s: `uses your last ${SKILL_INFO[branch.skill].name}`, c: COST }]);
+      const looking = inp.projecting && !branch.shadow;
+      if (looking || !inp.projecting) rows.push([{ s: looking ? 'looking further ahead...' : inp.touch ? 'hold the 15s eye button' : 'hold Q to look 15s ahead', c: DIM }]);
+    }
+    // one shared centre, pulled in from the screen's edges so no row is cut off (the view can be wider
+    // than the screen: it is cropped to cover it)
+    const left = this.p.screenToWorld(0, 0, 1).x;
+    const right = left + this.p.canvas.width / this.p.scale;
+    let half = 0;
+    for (const r of rows) half = Math.max(half, this.rowWidth(r) / 2);
+    const x = Math.max(left + half + 2, Math.min(right - half - 2, w.x));
+    rows.forEach((r, i) => this.textRow(r, x, w.y - 38 - i * 10));
+  }
+
+  /** One fate thread in its fate's pattern (doomed: dashes, saved: diamonds, else dots), each mark on a
+   *  dark rim so it reads on grass, snow and lava alike. It fades along the way, never out. */
+  private thread(pts: number[], kind: FateKind, c: Rgb, a: number, march: number): void {
+    const O = this.over, W = this.atlas.white;
+    const seg = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0.5 };
+    const [r, g, b] = c;
+    for (const m of threadMarks(pts, kind, march)) {
+      const k = a * (1 - 0.4 * m.f), rim = k * 0.8;
+      const x = Math.round(m.x), y = Math.round(m.y) - 5;
+      if (kind === 'dead') {
+        const dx = m.x2 - m.x, dy = m.y2 - m.y, len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        const rot = Math.atan2(dy, dx), ux = dx / len, uy = dy / len;
+        O.push(seg, x - ux, y - uy, { sx: len + 2, sy: 4, rot, ...RIM, a: rim });
+        O.push(seg, x, y, { sx: len, sy: 2, rot, r, g, b, a: k });
+      } else if (kind === 'saved') {
+        O.rect(W, x - 2, y, 5, 1, RIM.r, RIM.g, RIM.b, rim);
+        O.rect(W, x - 1, y - 1, 3, 3, RIM.r, RIM.g, RIM.b, rim);
+        O.rect(W, x, y - 2, 1, 5, RIM.r, RIM.g, RIM.b, rim);
+        O.rect(W, x - 1, y, 3, 1, r, g, b, k);
+        O.rect(W, x, y - 1, 1, 3, r, g, b, k);
+      } else {
+        O.rect(W, x - 2, y - 2, 4, 4, RIM.r, RIM.g, RIM.b, rim);
+        O.rect(W, x - 1, y - 1, 2, 2, r, g, b, k);
       }
     }
   }
 
+  /** The part of the world on screen and clear of the HUD, 4 px in from its edges. */
+  private safeRect(s: Insets = NO_INSETS): SafeRect {
+    const cv = this.p.canvas, k = cv.width / Math.max(1, cv.clientWidth) / this.p.scale; // world px per CSS px
+    const tl = this.p.screenToWorld(0, 0, 1);
+    const w = cv.width / this.p.scale, h = cv.height / this.p.scale;
+    return { x0: tl.x + s.left * k + 4, x1: tl.x + w - s.right * k - 4, y0: tl.y + s.top * k + 4, y1: tl.y + h - s.bottom * k - 4 };
+  }
+
+  /** Where a pinned skull sits: just inside its edge point, leaving room for the arrow out to it. */
+  private static pinSkull(p: { x: number; y: number; dir: EdgeDir }): [number, number] {
+    switch (p.dir) {
+      case 'down': return [p.x, p.y - 9];
+      case 'up': return [p.x, p.y + 8];
+      case 'right': return [p.x - 9, p.y];
+      default: return [p.x + 8, p.y];
+    }
+  }
+
+  /** Deaths the screen can't show: a skull pinned inside the nearest edge with an arrow out towards
+   *  where it happens, and ×N when several end past the same stretch of edge. */
+  private drawPins(pins: Pin[]): void {
+    const groups = new Map<string, { p: Pin; n: number }>();
+    for (const p of pins) {
+      const key = `${p.dir}:${Math.round(p.x / 12)}:${Math.round(p.y / 12)}`;
+      const g = groups.get(key);
+      if (g) { g.n++; g.p.a = Math.max(g.p.a, p.a); } else groups.set(key, { p: { ...p }, n: 1 });
+    }
+    for (const { p, n } of groups.values()) {
+      const [sx, sy] = GameView.pinSkull(p);
+      this.arrow(Math.round(p.x), Math.round(p.y), p.dir, PAL.dead, p.a, SMALL_ARROW);
+      this.over.push(this.f('skull'), sx, sy, { a: p.a });
+      if (n > 1) this.text(this.over, `×${n}`, sx + (p.dir === 'right' ? -5 - this.textWidth(`×${n}`) : 5), sy - 3, PAL.dead[0], PAL.dead[1], PAL.dead[2], p.a, 'left');
+    }
+  }
+
+  /** A solid arrow with its tip at (x, y), pointing `dir`; `rows` are [offset back from the tip, width]. */
+  private arrow(x: number, y: number, dir: EdgeDir, c: Rgb, a = 1, rows: readonly (readonly [number, number])[] = BIG_ARROW): void {
+    const O = this.over, W = this.atlas.white;
+    const rect = (d: number, w: number): [number, number, number, number] => {
+      const h = w >> 1;
+      switch (dir) {
+        case 'down': return [x - h, y + d, w, 1];
+        case 'up': return [x - h, y - d - 1, w, 1];
+        case 'right': return [x + d, y - h, 1, w];
+        default: return [x - d - 1, y - h, 1, w];
+      }
+    };
+    // all the shadow first: a row's shadow must not fall on the row before it
+    for (const [d, w] of rows) { const [rx, ry, rw, rh] = rect(d, w); O.rect(W, rx + 1, ry + 1, rw, rh, RIM.r, RIM.g, RIM.b, a * 0.8); }
+    for (const [d, w] of rows) { const [rx, ry, rw, rh] = rect(d, w); O.rect(W, rx, ry, rw, rh, c[0], c[1], c[2], a); }
+  }
+
+  /** The first-doom lesson: a bobbing arrow over the skull, and the doomed Wyrdling ringed. A skull off
+   *  screen (or under the HUD) is pinned to the nearest edge, and the arrow points at the pin: the camera stays put. */
+  private drawPointer(sim: Sim, p: { x: number; y: number; id: number }, time: number, safe?: Insets): void {
+    const bob = Math.round(Math.sin(time * 6) * 2);
+    const pulse = 0.75 + 0.25 * Math.sin(time * 8);
+    const pin = edgePin(p.x, p.y - 5, this.safeRect(safe));
+    if (!pin) {
+      this.over.push(this.f('target', Math.floor(time * 10)), p.x, p.y - 5, { r: PAL.dead[0], g: PAL.dead[1], b: PAL.dead[2], a: pulse, sx: 1.6, sy: 1.6, smooth: true });
+      this.arrow(p.x, p.y - 14 + bob, 'down', PAL.dead);
+    } else {
+      const [sx, sy] = GameView.pinSkull(pin);
+      this.arrow(Math.round(sx), Math.round(sy) - 5 + bob, 'down', PAL.dead);
+    }
+    const w = sim.d.wyrds[p.id];
+    if (w && isAlive(w)) this.over.push(this.f('cursor.ring', Math.floor(time * 10)), w.x, w.y - 6, { r: PAL.dead[0], g: PAL.dead[1], b: PAL.dead[2], a: pulse });
+  }
+
+  /** A dashed ring of radius r turning slowly around (x, y). */
+  private ring(x: number, y: number, r: number, c: Rgb, a: number, time: number): void {
+    const W = this.atlas.white, n = Math.round(r * 6);
+    for (let i = 0; i < n; i++) {
+      if (((i + Math.floor(time * 8)) & 3) === 3) continue;
+      const t = (i / n) * Math.PI * 2;
+      const px = Math.round(x + Math.cos(t) * r), py = Math.round(y + Math.sin(t) * r * 0.55);
+      this.over.rect(W, px + 1, py + 1, 1, 1, 0.05, 0.03, 0.08, a * 0.7);
+      this.over.rect(W, px, py, 1, 1, c[0], c[1], c[2], a);
+    }
+  }
+
+  /** A staged-Vision marker: a ring on the ground where the calling happens, an arrow, the seconds to go
+   *  and (from tier 2) the calling's name; its terrain ghost from tier 3; the Wyrdling it goes to, ringed. */
+  private drawMark(sim: Sim, m: MarkView, time: number): void {
+    const TEAL: Rgb = [0.45, 1, 0.95];
+    const now = m.secs === null;
+    const pulse = 0.75 + 0.25 * Math.sin(time * (now ? 16 : 6));
+    if (m.ghost && !now) this.drawGhost(m.ghost, time);
+    this.ring(m.x, m.y, 9, TEAL, pulse, time);
+    if (!m.granted) {
+      const bob = now ? 0 : Math.round(Math.sin(time * 5) * 2);
+      this.arrow(m.x, m.y - 13 + bob, 'down', TEAL);
+      this.text(this.over, now ? 'NOW' : String(m.secs), m.x, m.y - 33, 1, 0.95, 0.6, 1);
+    }
+    if (m.label) this.text(this.over, m.label, m.x, m.y - 43, TEAL[0], TEAL[1], TEAL[2], 1);
+    const w = sim.d.wyrds[m.id];
+    if (w && isAlive(w) && !now) this.over.push(this.f('cursor.ring', Math.floor(time * 10)), w.x, w.y - 6, { r: TEAL[0], g: TEAL[1], b: TEAL[2], a: 0.85 });
+  }
+
+  /** What the calling would leave: a dimmed hollow with a light outline where it digs, gold where it weaves. */
+  private drawGhost(g: Ghost, time: number): void {
+    const O = this.over, W = this.atlas.white;
+    const dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
+    const k = 0.8 + 0.2 * Math.sin(time * 4);
+    const runs = (r: number[], cr: number, cg: number, cb: number, a: number) => {
+      for (let i = 0; i < r.length; i += 3) O.push(dot, r[i], r[i + 1], { sx: r[i + 2], sy: 1, r: cr, g: cg, b: cb, a: a * k });
+    };
+    runs(g.carved, 0.06, 0.04, 0.1, 0.45);
+    runs(g.edge, 1, 0.93, 0.75, 0.8);
+    runs(g.added, 1, 0.8, 0.3, 0.65);
+  }
+
+  private textWidth(s: string): number {
+    let w = s.length - 1;
+    for (const ch of s) w += (this.atlas.glyphs.get(ch) ?? this.atlas.glyphs.get(ch.toUpperCase()))?.w ?? 4;
+    return w;
+  }
+
+  /** '·' is not in the pixel font: rows draw it as a dot with room around it */
+  private segWidth(s: string): number {
+    return s === '·' ? 9 : this.textWidth(s);
+  }
+
+  private rowWidth(segs: Seg[]): number {
+    let total = -1;
+    for (const g of segs) total += this.segWidth(g.s) + 1;
+    return total;
+  }
+
+  /** Coloured pieces of one centred line. */
+  private textRow(segs: Seg[], x: number, y: number): void {
+    let cx = Math.round(x - this.rowWidth(segs) / 2);
+    const W = this.atlas.white;
+    const dot = { x: W.x + 1, y: W.y + 1, w: 1, h: 1, ax: 0, ay: 0 };
+    for (const g of segs) {
+      if (g.s === '·') {
+        this.over.push(dot, cx + 4, y + 4, { r: 0.05, g: 0.03, b: 0.08, a: 0.85, sx: 2, sy: 2 });
+        this.over.push(dot, cx + 3, y + 3, { r: g.c[0], g: g.c[1], b: g.c[2], sx: 2, sy: 2 });
+      } else this.text(this.over, g.s, cx, y, g.c[0], g.c[1], g.c[2], 1, 'left');
+      cx += this.segWidth(g.s) + 1;
+    }
+  }
+
+  /** Popups stay whole inside the view (a word by the level's edge slides in rather than being cut off),
+   *  and the newest sits where it happened, pushing any older one it would overlap up above it. */
   private drawPopups(dt: number): void {
-    for (const p of this.popups) {
-      const a = Math.min(1, p.life / 15);
-      this.text(this.over, p.text, p.x, Math.round(p.y), p.r, p.g, p.b, a);
+    const v = this.p.view; // camera x, y, view w, h
+    const placed: { x0: number; x1: number; y: number }[] = [];
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      const p = this.popups[i];
+      const half = Math.ceil(this.textWidth(p.text) / 2) + 1;
+      const x = Math.round(Math.max(v.x + half, Math.min(v.x + v.z - half, p.x)));
+      const at = () => Math.round(Math.max(v.y + 1, Math.min(v.y + v.w - POPUP_LINE, p.y - p.lift)));
+      let y = at();
+      for (let guard = 0; guard < 12; guard++) {
+        const hit = placed.find((r) => x - half < r.x1 && x + half > r.x0 && Math.abs(y - r.y) < POPUP_LINE);
+        if (!hit) break;
+        const want = hit.y - POPUP_LINE;
+        // no room above inside the view: overlap rather than leave it
+        if (want < v.y + 1) break;
+        p.lift += y - want;
+        y = at();
+      }
+      placed.push({ x0: x - half, x1: x + half, y });
+      this.text(this.over, p.text, x, y, p.r, p.g, p.b, Math.min(1, p.life / 15));
       p.y -= 0.35 * dt;
       p.life -= dt;
     }
@@ -875,12 +1687,71 @@ export class GameView {
   }
 }
 
-function stateLabel(w: Wyrd): string {
-  const perms = `${w.climber ? ' +climb' : ''}${w.glider ? ' +glide' : ''}`;
-  const names: Partial<Record<string, string>> = {
-    walk: 'walker', wait: 'waiting', fall: 'falling', glide: 'gliding', glide_open: 'gliding', climb: 'climbing', hoist: 'climbing', warden: 'warden',
-    weave: `weaver ${w.planks}`, shrug: 'walker', bash: 'basher', mine: 'miner', dig: 'digger', plant: 'rune', leap: 'leaping',
-    tumble: 'flung!', frozen: 'frozen', land: 'walker',
+type Rgb = readonly [number, number, number];
+interface Seg { s: string; c: Rgb }
+/** A fate's end pinned to the screen's edge (see edgePin), and how bright to draw it. */
+interface Pin { x: number; y: number; dir: EdgeDir; a: number }
+
+/** The dark rim under threads, arrows and glyphs. */
+const RIM = { r: 0.05, g: 0.03, b: 0.08 };
+const NO_INSETS: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
+/** Arrow shapes, [offset back from the tip, width] per row. */
+const BIG_ARROW = [[-10, 3], [-9, 3], [-8, 3], [-7, 3], [-6, 3], [-5, 9], [-4, 7], [-3, 5], [-2, 3], [-1, 1]] as const;
+const SMALL_ARROW = [[-5, 1], [-4, 1], [-3, 5], [-2, 3], [-1, 1]] as const;
+const DRAW_ORDER: readonly FateKind[] = ['alive', 'saved', 'dead'];
+/** Working states whose pose hides which way the Wyrdling faces. */
+const BUSY: ReadonlySet<WyrdState> = new Set<WyrdState>(['warden', 'dig', 'mine', 'bash', 'weave']);
+
+const DIM: Rgb = [0.8, 0.75, 0.68];
+const COST: Rgb = [1, 0.78, 0.4];
+
+const DEATH_WORDS: Record<string, string> = {
+  fall: 'falls', void: 'falls', water: 'drowns', lava: 'burns', fire: 'burns', magma: 'burns', sweep: 'burns', fireball: 'burns',
+  meteor: 'burns', spikes: 'spiked', crusher: 'crushed', slam: 'crushed', boulder: 'crushed', buried: 'buried', venom: 'poisoned',
+  icicle: 'struck', burrow: 'swallowed',
+};
+
+const STILL: Partial<Record<WyrdState, string>> = {
+  warden: 'stands guard', frozen: 'still frozen', fall: 'still falling', glide: 'still gliding', glide_open: 'still gliding',
+  climb: 'still climbing', hoist: 'still climbing', weave: 'still weaving', bash: 'still bashing', mine: 'still mining',
+  dig: 'still digging', leap: 'still in the air', tumble: 'still in the air', wait: 'still waiting',
+};
+
+/** A Wyrdling's predicted end, in words. */
+function endWords(e: FateEnd): [string, Rgb] {
+  if (e.kind === 'saved') return ['reaches the gate', PAL.good];
+  if (e.kind === 'dead') return [`${DEATH_WORDS[e.cause ?? ''] ?? 'lost'} at x ${Math.round(e.x)}`, PAL.bad];
+  if (e.trap) return [e.turned === 'warden' ? 'held back by a Warden' : 'trapped between walls', [1, 0.75, 0.4]];
+  if (e.turned) return [`turned back by a ${e.turned === 'warden' ? 'Warden' : 'wall'}`, [0.95, 0.85, 0.65]];
+  return [STILL[e.st ?? 'walk'] ?? 'still walking', [0.95, 0.9, 0.8]];
+}
+
+/** The loss comes first and buys what follows. */
+function isSacrifice(d: FateDelta): boolean {
+  return d.lost > 0 && (d.saved > 0 || d.freed > 0) && d.firstLoss <= d.firstGain;
+}
+
+/** What a calling changes for everyone, over the stretch both predictions cover. */
+function deltaWords(d: FateDelta): Seg[] {
+  const out: Seg[] = [];
+  const add = (s: string, c: Rgb) => {
+    if (out.length) out.push({ s: '·', c: DIM });
+    out.push({ s, c });
   };
-  return (names[w.st] ?? w.st) + perms;
+  const gains = [d.saved ? `${d.saved} saved` : '', d.freed ? `${d.freed} freed` : ''].filter(Boolean);
+  if (isSacrifice(d)) {
+    // a sacrifice: the loss comes first and buys what follows, so it shouldn't read as a mistake
+    add(`${d.lost} lost`, PAL.bad);
+    add(`${gains.join(', ')} later`, PAL.good);
+  } else {
+    if (d.saved) add(`saves ${d.saved}`, PAL.good);
+    if (d.freed) add(`frees ${d.freed}`, PAL.good);
+    if (d.lost) add(`${d.lost} more lost`, PAL.bad);
+    if (d.delayed) add(`${d.delayed} fewer home`, PAL.bad);
+  }
+  if (d.stillLost) add(`${d.stillLost} still lost`, PAL.grim);
+  const secs = Math.round(d.window / TICK_RATE);
+  if (!out.length) out.push({ s: `no change in ${secs}s`, c: DIM });
+  else out.push({ s: ` (${secs}s)`, c: DIM });
+  return out;
 }

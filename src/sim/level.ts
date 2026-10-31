@@ -59,6 +59,8 @@ export type EntityDef =
 
 export type BossKind = 'wyrm' | 'jotunn' | 'herald';
 
+export type BossAttack = 'venom' | 'burrow' | 'lash' | 'icicles' | 'breath' | 'slam' | 'sweep' | 'magma' | 'meteors';
+
 export interface BossDef {
   kind: BossKind;
   x: number;
@@ -68,7 +70,18 @@ export interface BossDef {
   delay?: number;
   /** arena bounds the boss targets within */
   arena: { x0: number; x1: number; floorY: number };
+  /** the order the Seiðr stones light in (indices into the level's stones), repeating; default 0, 1, 2, … */
+  stones?: number[];
+  /** where each attack strikes (world x; for the lash, how far left the tail reaches), the n-th use of an
+   *  attack taking the n-th entry, repeating; an attack with no entry strikes the middle of the arena (the
+   *  lash, all of it). Fixed places, never the live crowd, so a Wyrdling a tick early or late never moves
+   *  a strike. */
+  aim?: Partial<Record<BossAttack, number[]>>;
 }
+
+/** What a solution step is for. 'target' means the solution's save count (`solutionSaves ?? target`);
+ *  'finish' marks a step needed only so the run ends by itself (nobody left wandering). */
+export type StepPurpose = 'quota' | 'target' | 'spindle' | 'boss' | 'finish';
 
 /** A scripted assignment used by the test-suite to prove a level is solvable. */
 export interface SolutionStep {
@@ -86,6 +99,9 @@ export interface SolutionStep {
   maxY?: number;
   /** require state */
   state?: string;
+  /** what would be lost without this step: the level tests rerun the solution with exactly this
+   *  step dropped and expect at least one of these to fail */
+  purpose?: StepPurpose[];
 }
 
 export interface LevelDef {
@@ -94,6 +110,8 @@ export interface LevelDef {
   realm: RealmId;
   /** flavour line shown on the intro card */
   intro: string;
+  /** the one idea this level teaches or combines, in a few words (shown on the intro card; see AGENTS.md) */
+  idea?: string;
   /** one-line tips shown as the level begins (legible tutorialisation) */
   hints?: string[];
   width: number;

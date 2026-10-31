@@ -1,6 +1,8 @@
 // Contract between the procedural art modules and the renderer. See docs/ART_SPEC.md.
+import type { RealmId } from '../sim/level';
 
-export type RealmId = 'midgard' | 'niflheim' | 'muspelheim';
+// one realm list for levels and art: the levels declare it, the art draws one set per realm
+export type { RealmId };
 
 export const REALMS: RealmId[] = ['midgard', 'niflheim', 'muspelheim'];
 

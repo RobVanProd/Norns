@@ -1,20 +1,38 @@
 // Bosses: deterministic, telegraphed attack patterns + Seiðr stones (the boss weak point).
 // Every attack spends `warn` ticks visibly telegraphing before it does anything, and all of it is
-// simulation state, so Foresight shows exactly who an incoming attack will hit.
+// simulation state, so Foresight shows exactly who an incoming attack will hit. Nothing here draws on the
+// RNG or picks out a live Wyrdling: the stones light in a fixed order shown in advance, the attacks come
+// in a fixed rotation, and each strikes a fixed place (BossDef.stones, PATTERNS, BossDef.aim). A plan
+// that works keeps working when a calling lands a tick early or late.
 import { Mat } from './constants';
-import type { BossDef } from './level';
+import type { BossAttack, BossDef, BossKind } from './level';
 import { isAlive, type BossState, type Hazard, type HazardKind, type Projectile, type ProjectileKind, type Wyrd } from './state';
 import type { Sim } from './sim';
 
 const STONE_FIRST = 60;
-const STONE_COOLDOWN = 75;
+/** ticks from one stone's strike to the next one lighting */
+export const STONE_COOLDOWN = 75;
 const DYING_TICKS = 90;
+/** half-width of the ground the Jötunn's fist crushes (the telegraph ring shows it) */
+export const SLAM_CRUSH = 20;
 
 export function createBoss(def: BossDef): BossState {
   return {
     kind: def.kind, hp: def.hp, maxHp: def.hp, x: def.x, y: def.y, act: 'idle', at: 0,
-    cd: def.delay ?? 150, seq: 0, hurt: 0, stone: -1, stoneCd: STONE_FIRST, dying: 0, m: [],
+    cd: def.delay ?? 150, seq: 0, hurt: 0, stone: -1, ring: 0, stoneCd: STONE_FIRST, dying: 0,
   };
+}
+
+/** The order a level's `count` stones light in. */
+export function stoneOrder(def: BossDef, count: number): number[] {
+  return def.stones?.length ? def.stones : Array.from({ length: count }, (_, i) => i);
+}
+
+/** The stone that lights next, shown in advance (-1 once the guardian has fallen). */
+export function nextStone(b: BossState, def: BossDef, count: number): number {
+  if (b.hp <= 0 || count === 0) return -1;
+  const order = stoneOrder(def, count);
+  return order[b.ring % order.length];
 }
 
 export function bossLocksExit(sim: Sim): boolean {
@@ -45,10 +63,12 @@ export function bossCore(b: BossState): { x: number; y: number } {
   }
 }
 
-const PATTERNS: Record<string, string[][]> = {
-  wyrm: [['venom', 'venom'], ['venom', 'burrow', 'venom', 'burrow'], ['lash', 'venom', 'burrow', 'venom', 'lash', 'burrow']],
-  jotunn: [['icicles', 'breath'], ['icicles', 'slam', 'breath', 'slam'], ['slam', 'icicles', 'breath', 'icicles', 'slam']],
-  herald: [['meteors', 'sweep'], ['sweep', 'meteors', 'magma'], ['magma', 'sweep', 'meteors', 'sweep', 'meteors']],
+/** Each guardian's attacks in the order it uses them, repeating. Every attack comes in the first round, so
+ *  a fight shows them all without lasting longer; the guardian's wounds only shorten the pauses between. */
+export const PATTERNS: Record<BossKind, BossAttack[]> = {
+  wyrm: ['burrow', 'venom', 'lash', 'venom'],
+  jotunn: ['icicles', 'breath', 'slam'],
+  herald: ['meteors', 'sweep', 'magma'],
 };
 const COOLDOWN = [190, 150, 120];
 
@@ -66,18 +86,15 @@ export function bossStep(sim: Sim): void {
     return;
   }
 
-  // --- Seiðr stones
+  // --- Seiðr stones: one lights at a time, in the level's fixed order
   const stones = sim.L.seidr;
   if (stones.length) {
     if (b.stone < 0) {
       b.stoneCd--;
       if (b.stoneCd <= 0) {
-        const prev = b.m[9] ?? -1;
-        let next = stones.length === 1 ? 0 : Math.floor(sim.rand() * (stones.length - 1));
-        if (stones.length > 1 && next >= prev && prev >= 0) next++;
-        if (next >= stones.length) next = 0;
-        b.stone = next;
-        sim.emit('seidr_on', stones[next].x, stones[next].y, next);
+        b.stone = nextStone(b, def, stones.length);
+        b.ring++;
+        sim.emit('seidr_on', stones[b.stone].x, stones[b.stone].y, b.stone);
       }
     } else {
       const s = stones[b.stone];
@@ -85,7 +102,6 @@ export function bossStep(sim: Sim): void {
         if (!isAlive(w) || w.st === 'tumble' || w.st === 'leap' || w.st === 'frozen') continue;
         if (Math.abs(w.x - s.x) <= 7 && Math.abs(w.y - s.y) <= 3) {
           hitBoss(sim, b, s.x, s.y);
-          b.m[9] = b.stone;
           b.stone = -1;
           b.stoneCd = STONE_COOLDOWN;
           break;
@@ -95,12 +111,11 @@ export function bossStep(sim: Sim): void {
   }
   if (b.hp <= 0) return;
 
-  // --- attack scheduler
+  // --- attack scheduler: a fixed rotation
   if (b.act === 'idle') {
     b.cd--;
     if (b.cd <= 0) {
-      const phase = bossPhase(b);
-      const pat = PATTERNS[b.kind][phase];
+      const pat = PATTERNS[b.kind as BossKind];
       b.act = pat[b.seq % pat.length];
       b.seq++;
       b.at = 0;
@@ -128,6 +143,14 @@ function hitBoss(sim: Sim, b: BossState, sx: number, sy: number): void {
     b.act = 'idle';
     sim.d.projectiles.length = 0;
     sim.d.hazards = sim.d.hazards.filter((h) => h.kind === 'beam');
+    if (b.kind === 'jotunn') {
+      // the giant crashes down: one last quake where its fist fell (no blow), shaking loose any Warden still
+      // holding the crowd back from the yard
+      const def = sim.L.def.boss!;
+      const x = clampX(def, def.aim?.slam?.[0] ?? (def.arena.x0 + def.arena.x1) / 2);
+      const y = surfaceY(sim, x, def.arena.floorY - 140);
+      sim.d.hazards.push(mkHazard('slam', x, y, x, y, 0, 40, 0, 0));
+    }
     sim.emit('boss_defeat', core.x, core.y, undefined, b.kind);
   }
 }
@@ -138,14 +161,27 @@ function mkHazard(kind: HazardKind, x0: number, y0: number, x1: number, y1: numb
 
 // ------------------------------------------------------------------ helpers
 
-function targets(sim: Sim, def: BossDef): Wyrd[] {
-  return sim.d.wyrds.filter((w) => isAlive(w) && w.x >= def.arena.x0 && w.x <= def.arena.x1 && w.st !== 'frozen');
+/** Where this use of the current attack strikes: its n-th use takes the n-th entry of the level's aim list. */
+function aimX(b: BossState, def: BossDef): number {
+  return aimOf(def, b.kind as BossKind, b.act as BossAttack, b.seq - 1); // seq already counts this one
 }
 
-function pickTarget(sim: Sim, def: BossDef): Wyrd | null {
-  const ts = targets(sim, def);
-  if (!ts.length) return null;
-  return ts[Math.floor(sim.rand() * ts.length)];
+/** Where `act`, as the i-th attack of the rotation, strikes: its n-th use takes its n-th aim. */
+function aimOf(def: BossDef, kind: BossKind, act: BossAttack, i: number): number {
+  const list = def.aim?.[act];
+  if (!list?.length) return (def.arena.x0 + def.arena.x1) / 2;
+  const pat = PATTERNS[kind];
+  let n = 0;
+  for (let j = 0; j < i; j++) if (pat[j % pat.length] === act) n++;
+  return list[n % list.length];
+}
+
+/** The attack the guardian uses next, where, and in how many ticks: all fixed, so it can be shown before
+ *  its telegraph starts (null while an attack is under way or once the guardian has fallen). */
+export function nextAttack(b: BossState, def: BossDef): { act: BossAttack; x: number; in: number } | null {
+  if (b.hp <= 0 || b.act !== 'idle') return null;
+  const kind = b.kind as BossKind, act = PATTERNS[kind][b.seq % PATTERNS[kind].length];
+  return { act, x: clampX(def, aimOf(def, kind, act, b.seq)), in: b.cd };
 }
 
 /** First solid pixel scanning down from `fromY` at column x. */
@@ -186,11 +222,8 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
       const k = b.at - WIND;
       const shots = phase === 0 ? 2 : 3;
       if (k % 9 === 0 && k / 9 < shots) {
-        const t = pickTarget(sim, def);
         const mouth = bossEmitter(b);
-        const lead = t ? t.x + (t.st === 'walk' ? t.dir * 50 : 0) : def.arena.x0 + sim.rand() * (def.arena.x1 - def.arena.x0);
-        const off = (k / 9 - 1) * 26;
-        const tx = clampX(def, Math.round(lead + off));
+        const tx = clampX(def, Math.round(aimX(b, def) + (k / 9 - (shots - 1) / 2) * 26));
         const ty = surfaceY(sim, tx, top);
         lob(sim, 'venom', mouth.x, mouth.y, tx, ty, 40, gravityOf('venom'));
         sim.emit('venom_spit', mouth.x, mouth.y);
@@ -199,8 +232,7 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     }
     case 'burrow': {
       if (b.at === 1) {
-        const t = pickTarget(sim, def);
-        const x = clampX(def, t ? t.x + (t.st === 'walk' ? t.dir * 30 : 0) : (def.arena.x0 + def.arena.x1) / 2);
+        const x = clampX(def, aimX(b, def));
         const y = surfaceY(sim, x, top);
         sim.d.hazards.push(mkHazard('burrow', x, y, x, y, phase === 2 ? 40 : 50, 24, 0, 0));
         sim.emit('burrow', x, y);
@@ -209,7 +241,9 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     }
     case 'lash': {
       if (b.at === 1) {
-        sim.d.hazards.push(mkHazard('lash', def.arena.x0, def.arena.floorY - 34, def.arena.x1, def.arena.floorY + 1, 45, 30, -1, def.arena.x1));
+        // the tail whips along the floor from the Wyrm's side, right to left, as far as the aim (or the whole arena)
+        const x0 = def.aim?.lash?.length ? clampX(def, aimX(b, def)) : def.arena.x0, x1 = def.arena.x1;
+        sim.d.hazards.push(mkHazard('lash', x0, def.arena.floorY - 34, x1, def.arena.floorY + 1, 45, 30, -1, x1));
       }
       return b.at >= 85;
     }
@@ -217,11 +251,9 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     case 'icicles': {
       if (b.at === 1) {
         const n = phase === 0 ? 4 : 5;
-        const ts = targets(sim, def);
+        const cx = aimX(b, def);
         for (let i = 0; i < n; i++) {
-          const t = ts.length ? ts[Math.floor(sim.rand() * ts.length)] : null;
-          const base = t ? t.x + (t.st === 'walk' ? t.dir * 40 : 0) : def.arena.x0 + sim.rand() * (def.arena.x1 - def.arena.x0);
-          const x = clampX(def, Math.round(base + (sim.rand() - 0.5) * 50));
+          const x = clampX(def, Math.round(cx + (i - (n - 1) / 2) * 24));
           const y = surfaceY(sim, x, top);
           // icicle falls from the ceiling above the marker; spawn delayed via t offset
           const ceil = ceilingY(sim, x, y);
@@ -234,11 +266,10 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     }
     case 'breath': {
       if (b.at === 1) {
-        const t = pickTarget(sim, def);
-        const cx = clampX(def, t ? t.x : (def.arena.x0 + def.arena.x1) / 2);
+        const cx = clampX(def, aimX(b, def));
         const w = phase === 2 ? 110 : 80;
         const x0 = Math.max(def.arena.x0, cx - w / 2), x1 = Math.min(def.arena.x1, cx + w / 2);
-        const sy = t ? t.y : def.arena.floorY;
+        const sy = surfaceY(sim, Math.round(cx), top);
         sim.d.hazards.push(mkHazard('breath', x0, sy - 30, x1, sy + 3, 40, 36, -1, 0));
         sim.emit('inhale', b.x, b.y);
       }
@@ -246,8 +277,7 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     }
     case 'slam': {
       if (b.at === 1) {
-        const t = pickTarget(sim, def);
-        const x = clampX(def, t ? t.x + (t.st === 'walk' ? t.dir * 36 : 0) : (def.arena.x0 + def.arena.x1) / 2);
+        const x = clampX(def, aimX(b, def));
         const y = surfaceY(sim, x, top);
         sim.d.hazards.push(mkHazard('slam', x, y, x, y, 36, 40, 0, 0));
       }
@@ -256,11 +286,8 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     // ---------------- Herald
     case 'sweep': {
       if (b.at === 1) {
-        // sweep a 180 px stretch centred on the median Wyrdling
-        const xs = targets(sim, def).map((w) => w.x).sort((a, c) => a - c);
-        const cx = xs.length ? xs[xs.length >> 1] : (def.arena.x0 + def.arena.x1) / 2;
-        const x0 = Math.max(def.arena.x0, Math.min(def.arena.x1 - 180, cx - 90));
-        // the blade passes low: anything 16+ px up (the dais, a weaver's stair) is safe
+        // a 180 px stretch of floor centred on the aim; the blade passes low: anything 16+ px up is safe
+        const x0 = Math.max(def.arena.x0, Math.min(def.arena.x1 - 180, aimX(b, def) - 90));
         sim.d.hazards.push(mkHazard('sweep', x0, def.arena.floorY - 16, x0 + 180, def.arena.floorY - 4, 54, 24, -1, x0 + 180));
       }
       return b.at >= 90;
@@ -275,10 +302,9 @@ function runAttack(sim: Sim, b: BossState, def: BossDef): boolean {
     case 'meteors': {
       if (b.at === 1) {
         const n = phase === 0 ? 2 : 3;
+        const cx = aimX(b, def);
         for (let i = 0; i < n; i++) {
-          const t = pickTarget(sim, def);
-          const base = t ? t.x + (t.st === 'walk' ? t.dir * 45 : 0) : def.arena.x0 + sim.rand() * (def.arena.x1 - def.arena.x0);
-          const tx = clampX(def, Math.round(base + (i - (n - 1) / 2) * 30));
+          const tx = clampX(def, Math.round(cx + (i - (n - 1) / 2) * 30));
           const ty = surfaceY(sim, tx, top);
           const sx = tx + 60, sy = top - 20;
           const T = 45 + i * 8;
@@ -362,11 +388,14 @@ function impact(sim: Sim, p: Projectile, x: number, y: number): void {
     case 'fireball':
       sim.carveCircle(x, y - 4, 7);
       sim.emit('meteor', x, y);
-      if (sim.d.boss && bossPhase(sim.d.boss) === 2 && sim.rand() < 0.3) {
-        sim.d.bodies.push({ id: sim.d.bodies.length, x, y: y - 16, vx: (sim.rand() - 0.5) * 2, vy: -1, r: 6, a: 0, sleep: 0, gone: false });
-      }
       break;
   }
+}
+
+/** On its feet on the ground (walking, working or holding the line). */
+function standing(w: Wyrd): boolean {
+  return w.st === 'walk' || w.st === 'wait' || w.st === 'weave' || w.st === 'bash' || w.st === 'mine' || w.st === 'dig' ||
+    w.st === 'shrug' || w.st === 'land' || w.st === 'warden' || w.st === 'plant';
 }
 
 function wyrdAt(sim: Sim, x: number, y: number): boolean {
@@ -393,7 +422,7 @@ function stepHazards(sim: Sim): void {
     if (h.gone) continue;
     h.t++;
     const active = h.t >= h.warn && h.t < h.warn + h.dur;
-    if (h.t === h.warn) sim.emit('hazard_' + h.kind, (h.x0 + h.x1) / 2, (h.y0 + h.y1) / 2, undefined, h.kind);
+    if (h.t === h.warn) sim.emit(`hazard_${h.kind}`, (h.x0 + h.x1) / 2, (h.y0 + h.y1) / 2, undefined, h.kind);
     switch (h.kind) {
       case 'burrow':
         if (h.t === h.warn) {
@@ -435,8 +464,11 @@ function stepHazards(sim: Sim): void {
         break;
       case 'slam':
         if (h.t === h.warn) {
+          // the fist crushes everyone beneath it, on the ground or the walls (the frozen shatter); only those
+          // in the air are spared. The quake then throws the rest of the ground aside.
           for (const w of sim.d.wyrds) {
-            if (isAlive(w) && Math.abs(w.x - h.x0) <= 6 && w.y >= h.y0 - 16 && w.y <= h.y0 + 2) sim.kill(w, 'unravel', 'slam');
+            if (!isAlive(w) || !(standing(w) || w.st === 'frozen' || w.st === 'climb' || w.st === 'hoist')) continue;
+            if (Math.abs(w.x - h.x0) <= SLAM_CRUSH && w.y >= h.y0 - 16 && w.y <= h.y0 + 8) sim.kill(w, 'unravel', 'slam');
           }
           sim.emit('slam', h.x0, h.y0);
         }
@@ -444,10 +476,7 @@ function stepHazards(sim: Sim): void {
           const prev = (h.t - h.warn) * 4, cur = prev + 4;
           h.p = cur;
           for (const w of sim.d.wyrds) {
-            if (!isAlive(w)) continue;
-            const grounded = w.st === 'walk' || w.st === 'wait' || w.st === 'weave' || w.st === 'bash' || w.st === 'mine' || w.st === 'dig' ||
-              w.st === 'shrug' || w.st === 'land' || w.st === 'warden' || w.st === 'plant';
-            if (!grounded) continue;
+            if (!isAlive(w) || !standing(w)) continue;
             const dist = Math.abs(w.x - h.x0);
             if (dist > prev && dist <= cur && Math.abs(w.y - h.y0) <= 24) {
               const away = w.x >= h.x0 ? 1 : -1;
