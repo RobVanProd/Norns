@@ -11,7 +11,7 @@ Vitest.
 - A deterministic simulation (`src/sim`) runs at 30 ticks/s.
 - A low-res WebGL pipeline (`src/render`, `src/game/view.ts`) draws it.
 - All art and audio are generated in code at startup (`src/art`, `src/audio`).
-- There are 15 levels (`src/levels`), each shipped with a scripted solution that the tests replay.
+- There are 18 levels (`src/levels`), each shipped with a scripted solution that the tests replay.
 
 ## Commands
 
@@ -158,8 +158,10 @@ These are the rules players of the genre judge levels by. Break one only on purp
 a comment next to the level.
 
 - **Puzzle first, execution second.** The hard part is seeing the plan, not clicking on the right
-  pixel. Walkers move 1 px a tick, so a click's window in ticks is its window in px. Give every
-  required click slack and state it; the slack report in `npm test` prints each click's window.
+  pixel. Walkers move 1 px a tick, so a click's window in ticks is its window in px. Every scripted
+  click of a puzzle level must still win when it lands 10 ticks early or late in Midgard, 6 elsewhere
+  (refused clicks and clicks on the tick a Wyrdling appears don't count). *(Enforced; `SLACK_NEED` in
+  `tests/helpers.ts`. The guardians' fights are only reported.)* Fix a tight click with geometry.
 - **Every scripted step is load-bearing**, tagged with the `purpose` it serves. *(Enforced.)*
 - **The null run fails and never collects the spindle.** Doing nothing must not win. *(Enforced.)*
 - **Nothing that matters is invisible while paused.** A pause shows every threat, gate state and

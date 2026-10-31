@@ -80,7 +80,8 @@ describe('weave', () => {
   });
 
   it('drops the callings a rewind undid', () => {
-    const def = ALL_LEVELS.find((l) => l.id === 'm2')!;
+    // any level whose solution grants three callings on three different ticks
+    const def = ALL_LEVELS.find((l) => l.id === 'm4')!;
     const { weave } = solved(def);
     const rec = new WeaveRecorder(def);
     rec.weave.entries.push(...weave.entries.map((e) => ({ ...e })));
@@ -90,7 +91,7 @@ describe('weave', () => {
     expect(rec.weave.cut).toBeUndefined();
     // recording into the past without rewinding first is a bug in the caller
     const sim = Sim.create(def);
-    expect(() => rec.record(sim, 0, 'weaver')).toThrow();
+    expect(() => rec.record(sim, 0, 'glider')).toThrow();
   });
 
   it('goes stale when the geometry, the rules version or the level changes, not the text', () => {

@@ -36,6 +36,9 @@ function clear(s: SaveData, id: string, o: Partial<Outcome> = {}) {
 const openIds = (s: SaveData, realms: RealmInfo[] = REALM_LIST): string[] =>
   realms.flatMap((r) => r.levels).filter((l) => isUnlocked(s, l.id, realms)).map((l) => l.id);
 
+/** Midgard's puzzles in play order (m1, m2, m3, m3b, ...). */
+const MIDGARD_PUZZLES = REALM_LIST[0].levels.filter((l) => !l.boss).map((l) => l.id);
+
 /** Midgard with a new puzzle inserted after m2, as a later content update might ship it. */
 function withInserted(): RealmInfo[] {
   const extra: LevelDef = { ...level('m2'), id: 'm2b', name: 'A Thread Added Later' };
@@ -58,7 +61,7 @@ describe('progression', () => {
     expect(out.opened).toEqual(['m2', 'm3']);
     expect(openIds(s)).toEqual(['m1', 'm2', 'm3']);
     clear(s, 'm3');
-    expect(openIds(s)).toEqual(['m1', 'm2', 'm3', 'm4']);
+    expect(openIds(s)).toEqual(['m1', 'm2', 'm3', 'm3b', 'm3c']);
   });
 
   it('opens nothing for a run below the quota, however many stars it would otherwise earn', () => {
@@ -97,9 +100,9 @@ describe('progression', () => {
 
   it("opens the next realm when all of the previous realm's puzzles are cleared, guardian or not", () => {
     const s = newSave();
-    for (const id of ['m1', 'm2', 'm3']) clear(s, id);
+    for (const id of MIDGARD_PUZZLES.slice(0, -1)) clear(s, id);
     expect(realmUnlocked(s, 1)).toBe(false);
-    clear(s, 'm4');
+    clear(s, MIDGARD_PUZZLES[MIDGARD_PUZZLES.length - 1]);
     expect(realmUnlocked(s, 1)).toBe(true);
     expect(isUnlocked(s, 'n1')).toBe(true);
     expect(isUnlocked(s, 'm5')).toBe(true);
@@ -118,9 +121,9 @@ describe('progression', () => {
     const store = stubStorage();
     const before = loadSave();
     clear(before, 'm1');
-    clear(before, 'm2'); // opens m3 and m4
+    clear(before, 'm2'); // opens m3 and m3b
     const openBefore = openIds(before);
-    expect(openBefore).toEqual(['m1', 'm2', 'm3', 'm4']);
+    expect(openBefore).toEqual(['m1', 'm2', 'm3', 'm3b']);
 
     // the game updates with a new puzzle between m2 and m3, and the stored save loads again
     const inserted = withInserted();
@@ -128,15 +131,28 @@ describe('progression', () => {
     expect(store.size).toBe(1);
     for (const id of openBefore) expect(isUnlocked(after, id, inserted), id).toBe(true);
     expect(isUnlocked(after, 'm2b', inserted)).toBe(true); // follows the cleared m2
-    // position alone would have relocked m4 (its two predecessors are now m2b and m3); the sticky
+    // position alone would have relocked m3b (its two predecessors are now m2b and m3); the sticky
     // opened list is what keeps it open
-    expect(isUnlocked({ ...after, opened: [] }, 'm4', inserted)).toBe(false);
+    expect(isUnlocked({ ...after, opened: [] }, 'm3b', inserted)).toBe(false);
+  });
+
+  it('keeps open everything a save from before the Midgard split had open', () => {
+    // wave 1 shipped Midgard as m1, m2, m3, m4 and the Wyrm; this save cleared all four, so Niflheim opened
+    const store = stubStorage();
+    const stars = { m1: 1, m2: 1, m3: 1, m4: 1 };
+    store.set('norns.save.v1', JSON.stringify({ v: 1, stars, threads: 0, opened: ['m1', 'm2', 'm3', 'm4', 'm5', 'n1'] }));
+    const s = loadSave();
+    for (const id of ['m1', 'm2', 'm3', 'm4', 'm5', 'n1']) expect(isUnlocked(s, id), id).toBe(true);
+    expect(realmUnlocked(s, 1)).toBe(true);
+    // the split's new puzzles open by the usual rule: m3b and m3c follow the cleared m3
+    expect(isUnlocked(s, 'm3b')).toBe(true);
+    expect(isUnlocked(s, 'm3c')).toBe(true);
   });
 
   it('keeps the next realm open when a puzzle is added to a realm it was opened from', () => {
     stubStorage();
     const s = loadSave();
-    for (const id of ['m1', 'm2', 'm3', 'm4']) clear(s, id); // Niflheim opens by clearing every puzzle
+    for (const id of MIDGARD_PUZZLES) clear(s, id); // Niflheim opens by clearing every puzzle
     const inserted = withInserted();
     const after = loadSave();
     expect(realmUnlocked(after, 1, inserted)).toBe(true);

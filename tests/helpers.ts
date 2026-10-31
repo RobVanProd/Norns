@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LevelDef, SolutionStep, StepPurpose } from '../src/sim/level';
+import type { LevelDef, RealmId, SolutionStep, StepPurpose } from '../src/sim/level';
 import { Sim } from '../src/sim/sim';
 import { stepReady } from '../src/sim/solution';
 
@@ -149,23 +149,27 @@ export const SLACK_TICKS = 30;
  *  stalemated runs short; when written, 600 gave the same table as the full 8-minute horizon. */
 const SLACK_GRACE = 600;
 
+/** Ticks of slack every scripted click of a puzzle level must have on each side (enforced; boss levels are
+ *  only reported). Midgard teaches, so it asks for more. */
+export const SLACK_NEED: Record<RealmId, number> = { midgard: 10, niflheim: 6, muspelheim: 6 };
+
 export interface SlackRow {
   level: string;
   step: string;
   /** the recorded click */
   tick: number;
-  /** ticks the click can come earlier / later; `${SLACK_TICKS}+` if it never lost within the look */
-  early: number | string;
-  late: number | string;
-  /** ticks in the whole window, the recorded tick included */
-  window: number | string;
+  /** ticks the click can come earlier / later (SLACK_TICKS: never lost within the look); null if exempt */
+  early: number | null;
+  late: number | null;
   /** shifted clicks the sim refused: not losses, the click just would not land */
   refused: number;
+  /** why the step has no window: clicked on the tick its Wyrdling appears, or never fired */
+  exempt?: 'spawn' | 'never fired';
 }
 
-/** Report only. For each step: how many ticks earlier and later its click can land (exactly, with every
- *  other click at its recorded tick) while the solution still meets everything it meets as written.
- *  Refused clicks (canAssign false) are not losses; clicks on the tick the Wyrdling appears are exempt. */
+/** For each step: how many ticks earlier and later its click can land (exactly, with every other click at its
+ *  recorded tick) while the solution still meets everything it meets as written. Refused clicks (canAssign
+ *  false) are not losses; clicks on the tick the Wyrdling appears are exempt. */
 export function slackRows(def: LevelDef, rec: Recording): SlackRow[] {
   const goals = levelPurposes(def);
   const need = def.solutionSaves ?? def.target;
@@ -173,9 +177,9 @@ export function slackRows(def: LevelDef, rec: Recording): SlackRow[] {
   const won = (s: Sim) => goals.every((p) => purposeMet(def, s, p));
   return def.solution.map((step, i) => {
     const f = rec.fired[i];
-    const row: SlackRow = { level: def.id, step: `${i} ${step.skill} #${step.nth}`, tick: f, early: '-', late: '-', window: 'spawn', refused: 0 };
-    if (f < 0) return { ...row, window: 'never fired' };
-    if (f === rec.spawned[i]) return row;
+    const row: SlackRow = { level: def.id, step: `${i} ${step.skill} #${step.nth}`, tick: f, early: null, late: null, refused: 0 };
+    if (f < 0) return { ...row, exempt: 'never fired' };
+    if (f === rec.spawned[i]) return { ...row, exempt: 'spawn' };
     const edge = (dir: 1 | -1): number => {
       // every shift on this side shares the run up to its earliest click
       const base = rec.at(dir < 0 ? Math.max(0, f - SLACK_TICKS) : f);
@@ -192,19 +196,22 @@ export function slackRows(def: LevelDef, rec: Recording): SlackRow[] {
       return SLACK_TICKS;
     };
     const early = edge(-1);
-    const late = edge(1);
-    const open = early === SLACK_TICKS || late === SLACK_TICKS;
-    const show = (n: number) => (n === SLACK_TICKS ? `${n}+` : n);
-    return { ...row, early: show(early), late: show(late), window: open ? `${early + late + 1}+` : early + late + 1 };
+    return { ...row, early, late: edge(1) };
   });
 }
 
-// one recording per level per test file, shared by its checks and the slack report
+// one recording (and slack table) per level per test file, shared by its checks and the slack report
 const recordings = new Map<string, Recording>();
 function recording(def: LevelDef): Recording {
   let rec = recordings.get(def.id);
   if (!rec) recordings.set(def.id, (rec = recordSolution(def)));
   return rec;
+}
+const slacks = new Map<string, SlackRow[]>();
+function slack(def: LevelDef): SlackRow[] {
+  let rows = slacks.get(def.id);
+  if (!rows) slacks.set(def.id, (rows = slackRows(def, recording(def))));
+  return rows;
 }
 
 /** The checks every level gets. One file per realm, so vitest runs the realms in parallel. */
@@ -245,18 +252,36 @@ export function describeLevels(levels: LevelDef[]): void {
         expect(r.sim.d.saved).toBeLessThan(def.quota);
         expect(r.sim.d.spindle, 'the null run collects the spindle').toBe(false);
       });
+
+      // puzzles test ideas, not pixels; the guardians' fights are reported only (see reportSlack)
+      if (!def.boss) {
+        const need = SLACK_NEED[def.realm];
+        it(`every click can come ${need} ticks early or late and still win`, () => {
+          for (const row of slack(def)) {
+            if (row.exempt) continue;
+            expect(row.early, `${row.step} at tick ${row.tick}, earlier`).toBeGreaterThanOrEqual(need);
+            expect(row.late, `${row.step} at tick ${row.tick}, later`).toBeGreaterThanOrEqual(need);
+          }
+        });
+      }
     });
   }
 }
 
-/** Prints the realm's slack table; never fails. */
+/** Prints the realm's slack table; never fails (the puzzles' slack is enforced in describeLevels). */
 export function reportSlack(realm: string, levels: LevelDef[]): void {
-  it(`${realm}: slack report (report only)`, () => {
-    const rows = levels.flatMap((def) => slackRows(def, recording(def)));
+  it(`${realm}: slack report`, () => {
+    const show = (n: number | null) => (n === null ? '-' : n === SLACK_TICKS ? `${n}+` : n);
+    const open = (r: SlackRow) => (r.early === SLACK_TICKS || r.late === SLACK_TICKS ? '+' : '');
+    const rows = levels.flatMap((def) => slack(def).map((r) => ({
+      level: r.level, step: r.step, tick: r.tick, early: show(r.early), late: show(r.late),
+      window: r.exempt ?? `${r.early! + r.late! + 1}${open(r)}`,
+      refused: r.refused, need: def.boss ? 'report' : `±${SLACK_NEED[def.realm]}`,
+    })));
     console.log(`${realm} slack: how many ticks each click can come earlier or later (every other click at its exact ` +
       `tick) while the solution still meets all it meets as written. Walkers move 1 px a tick, so ticks = px. ` +
       `${SLACK_TICKS}+ = never lost within ${SLACK_TICKS} ticks; refused = shifted clicks the sim refused (not losses); ` +
-      `spawn = clicked as the Wyrdling appears (exempt).`);
+      `spawn = clicked as the Wyrdling appears (exempt); need = enforced on puzzles, reported on guardians.`);
     console.table(rows);
   });
 }
