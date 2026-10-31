@@ -35,7 +35,9 @@ export type SfxId =
   | 'icicle_fall' | 'ice_shatter' | 'freeze' | 'slam'
   | 'fire_whoosh' | 'magma' | 'meteor'
   | 'rewind_start' | 'rewind_end' | 'foresight' | 'pause' | 'unpause'
-  | 'star' | 'purchase' | 'level_start';
+  | 'star' | 'purchase' | 'level_start'
+  // Wyrdling barks: formant gibberish on the voice bus (own volume, rate-limited, see barks.ts)
+  | 'bark_hup' | 'bark_mm' | 'bark_oh' | 'bark_whee' | 'bark_yay';
 
 export interface SfxOpts { pan?: number /* -1..1 */; volume?: number /* 0..1, default 1 */; pitch?: number /* playback-rate multiplier, default 1 */ }
 
@@ -46,16 +48,19 @@ export interface AudioEngine {
   playMusic(id: SongId, opts?: { fadeIn?: number }): void; // crossfades from the current song; same id = no-op
   stopMusic(fadeOut?: number): void;
   stinger(id: StingerId): void;                            // short jingle; ducks music while it plays
-  sfx(id: SfxId, opts?: SfxOpts): void;                    // fire-and-forget, safe to spam (internal voice limiting/rate limiting per id)
+  sfx(id: SfxId, opts?: SfxOpts): void;                    // fire-and-forget, safe to spam (internal voice limiting/rate limiting per id; barks also share a crowd limit)
   setIntensity(level: 0 | 1 | 2): void;                    // boss phases: adds/removes layers live, on bar boundaries
   setRewinding(on: boolean): void;                         // tape-reverse feel: music pitch bends down + lowpass + wobble while on
   setPaused(on: boolean): void;                            // music muffled (lowpass) + quieter while paused
   setSpeed(mult: 1 | 2 | 4): void;                         // optional subtle effect for fast-forward (e.g. slight highpass); must not change tempo
-  setVolumes(v: { master?: number; music?: number; sfx?: number }): void;
+  setVolumes(v: { master?: number; music?: number; sfx?: number; voice?: number }): void;
   setMuted(m: boolean): void;
 }
 export const audio: AudioEngine;
+export function barkPitch(id: number): number;            // a Wyrdling's own voice: playback rate 0.88..1.12, fixed by its id
 ```
+
+The game plays ½× speed as `setSpeed(1)`: the fast-forward colour has nothing for slow motion.
 
 Calls before `unlock()` must be safe no-ops (but remember the requested song and start it on
 unlock). Everything must survive the tab being backgrounded (AudioContext suspended/resumed).
@@ -90,6 +95,18 @@ consecutive saves); `blast` a meaty boom with low thump; `death_*` soft, sad but
 `dig/bash/mine` crunchy and short (they repeat every ~0.25–0.5 s, so keep them subtle);
 `boss_telegraph` a clear warning tone. Rate-limit spammy ids internally (e.g. `dig` at most every
 60 ms). Mix: music sits under SFX; master limiter (DynamicsCompressor) prevents clipping.
+
+## Wyrdling voices
+
+Five barks, formant gibberish from a buzzing source through moving formant filters (`sfx.ts`):
+`bark_hup` as a Wyrdling drops in, `bark_mm` (mm-hm) when it is granted a calling, `bark_oh`
+(uh-oh) as a fatal fall begins, `bark_whee` as a glide opens, `bark_yay` at the Root Gate. The
+vowels only suggest words; nothing is spoken. The game passes `pitch: barkPitch(id)`, so each
+Wyrdling keeps one voice. Barks go to their own voice bus (the Voices slider in Settings) and share
+a crowd limit (`barks.ts`, `BARK_LIMITS`): a short hush after every bark, at most 3 in any second,
+and a cooldown per kind. Barks over the limit are dropped, not queued. Every bark has something to
+see as well (a speech bubble, or the calling's popup for `bark_mm`), so no information is carried
+by a voice alone.
 
 ## Verification expectations
 

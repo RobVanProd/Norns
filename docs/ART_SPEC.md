@@ -18,6 +18,9 @@ work), not 8-bit:
 - Dithering only for large gradients (sky, glows), using Bayer 4×4 (`ditherPick`).
 - Readability first: characters must pop against every realm's terrain (dark outline + bright
   hood). Indestructible materials must look obviously different from diggable ones.
+- Red means danger. Doomed Foresight threads run along the ground, so ground decor never uses red
+  (Midgard's flowers are white and violet), and hazards carry red in every realm (spikes have hot
+  red tips even on Niflheim's ice).
 - Animations: anticipation + follow-through; squash & stretch on landings; secondary motion
   (hood tip, cape, golden thread trailing from the back).
 
@@ -57,6 +60,16 @@ its back that sways with motion. Distinct from classic lemmings (no green hair, 
 | `wyrd.burn` | 10 | death by fire/lava: flashes orange-white, crumbles into embers |
 | `wyrd.drown` | 10 | death in water: sinks, bubbles rise |
 | `wyrd.frozen` | 1 | Wyrdling encased in a translucent ice block (~12×14 inside the cell) |
+| `wyrd.idle` | 7 | waiting: 0 stand, 1 blink, 2 look up, 3–4 tap a foot, 5 scratch the hood, 6 stretch (the view sequences them) |
+| `wyrd.cower` | 4 | Foresight has it dying within a second: hunched, paws to the face, trembling |
+| `wyrd.flail` | 4 | the first moments of a fatal fall: arms windmilling, eyes wide |
+| `wyrd.cheer` | 4 | home at the Root Gate: crouch, jump with both arms up, peak, land |
+| `wyrd.flat` | 2 | crushed flat as a pancake (bloodless); it pops back up as `fx.thread` |
+| `wyrd.hood` | 2 | drowned: an empty hood afloat, anchor on the waterline |
+| `fx.soot` | 4 | 14×13, anchor (7,12): burned: a puff of soot with two eyes that blink, then thin away |
+| `fx.pop` | 3 | 11×11, anchor (5,5): a little burst of gold |
+| `fx.thread` | 4 | 7×16, anchor (3,15): the loose thread a Wyrdling becomes, wriggling upward |
+| `emote.hup` / `emote.oh` / `emote.whee` / `emote.yay` | 1 each | 13×11, anchor (2,10): speech bubbles, the visible half of each voice bark |
 | `mark.climber` | 1 | 7×7, anchor (3,6): tiny claw/glove badge shown above the head of a Climber |
 | `mark.glider` | 1 | 7×7, anchor (3,6): tiny leaf badge shown above the head of a Glider |
 
@@ -74,7 +87,7 @@ its back that sways with motion. Distinct from classic lemmings (no green hair, 
 | `seidr.off` | 20×10 | (10,9) | 1 | Seiðr stone (boss weak-point plate), dormant |
 | `seidr.on` | 20×10 | (10,9) | 4 | glowing, rune pulsing, motes rising |
 | `vent` | 16×6 | (8,5) | 4 | updraft vent grate, spinning fan blades |
-| `spikes` | 8×6 | (0,5) | 1 | tileable horizontally, iron spikes |
+| `spikes` | 8×6 | (0,5) | 1 | tileable horizontally, iron spikes with hot red tips |
 | `crusher.head` | 24×16 | (12,15) | 1 | stone/iron piston head, toothed bottom |
 | `crusher.shaft` | 8×8 | (4,0) | 1 | chain/shaft segment, tiled upward |
 | `firejet.base` | 12×6 | (6,5) | 1 | nozzle |
@@ -84,7 +97,7 @@ its back that sways with motion. Distinct from classic lemmings (no green hair, 
 | `torch` | 8×16 | (4,15) | 4 | wall torch / sconce with flame |
 | `brazier` | 12×12 | (6,11) | 4 | standing brazier with fire |
 | `crystal` | 10×16 | (5,15) | 1 | glowing ice crystal (Niflheim decor) |
-| `mushroom` | 8×8 | (4,7) | 2 | two variants as two frames (Midgard decor) |
+| `mushroom` | 8×8 | (4,7) | 2 | two variants as two frames (Midgard decor); the view draws only frame 1, the tan cluster, since the other has a red cap |
 | `banner` | 10×20 | (5,0) | 4 | hanging cloth banner with a knot rune, waving |
 | `runestone` | 12×18 | (6,17) | 1 | carved standing stone |
 | `skull` | 7×7 | (3,3) | 1 | Foresight: predicted death marker (red/bone) |
@@ -157,6 +170,7 @@ volcanoes, lava falls, obsidian spires, ash.
 | `jotunn.body.slam` | 128×112 | (64,111) | 1 (one arm raised high) |
 | `jotunn.body.hurt` | 128×112 | (64,111) | 1 |
 | `jotunn.fist` | 36×30 | (18,29) | 1 |
+| `jotunn.arm` | 22×16 | (11,0) | 1 (segment, tiled down to the fist) |
 | `jotunn.icicle` | 8×20 | (4,19) | 1 |
 | `herald.body.idle` | 112×128 | (56,127) | 2 |
 | `herald.body.raise` | 112×128 | (56,127) | 1 |
@@ -200,3 +214,9 @@ For each world pixel `p=(x,y)` with material `m = mat(p)` (atlas column `m`, `u 
    `(mt*64+u, 95+d)`; draw it if alpha > 0.
 
 Lighting (multiplicative ambient + additive coloured lights with banded falloff) is applied after.
+
+**Clear Sight** (hold C in play) replaces all of this with shading by class: diggable ground keeps
+only the lightness of its body tile under one sandy tint, rune-iron and gates are steel blue and
+hatched, brittle ground is speckled red, edges are lit on top and dark elsewhere, and air is left
+empty (no back wall, no decoration). Lighting is flat and the backgrounds are not drawn. Material
+art therefore needs no Clear Sight variant, but the lightness of a body tile still shows through.

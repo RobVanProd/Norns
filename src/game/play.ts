@@ -1051,7 +1051,8 @@ export class PlayScene {
       pointer: this.doomPointer && !(this.branch && this.hover === this.doomPointer.id) ? this.doomPointer : null, marks: this.markViews(),
       crowd: this.crowd, safe: this.insets ?? undefined,
       // the title and map backgrounds stay as they are
-      clearSight: this.cfg.mode !== 'attract' && (this.cfg.clearSight || !!this.input?.held.has('KeyC')),
+      // holding C shows it, unless the player has bound C to an action (it then does only that)
+      clearSight: this.cfg.mode !== 'attract' && (this.cfg.clearSight || (!!this.input?.held.has('KeyC') && !actionFor(this.cfg.keys, 'KeyC'))),
     });
     // the first sacrifice label ("1 lost · 3 saved later") gets a word on what it means
     if (this.view.sacrifice && this.teach('sacrifice')) {

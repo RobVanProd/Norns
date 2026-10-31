@@ -364,7 +364,9 @@ export class Game {
         const unlocked = open && isUnlocked(this.save, l.id);
         const mask = this.save.stars[l.id] ?? 0;
         const stars = el('div', { class: 'stars' });
-        for (let k = 0; k < 3; k++) stars.append(pixelCanvas(this.art.icons[mask & (1 << k) ? 'star' : 'star_empty'], 1, 'px icon'));
+        // a level without a Golden Spindle (the guardians) has two stars to earn, not three
+        const slots = l.entities.some((e) => e.type === 'spindle') ? 3 : 2;
+        for (let k = 0; k < slots; k++) stars.append(pixelCanvas(this.art.icons[mask & (1 << k) ? 'star' : 'star_empty'], 1, 'px icon'));
         const boss = !!l.boss;
         const why = !open ? 'Realm sealed' : boss ? `Clear ${Math.min(BOSS_NEEDS, puzzles.length)} of ${r.name}'s threads to wake the guardian`
           : puzzles.indexOf(l) === 1 ? 'Clear the thread before it' : 'Clear one of the two threads before it';

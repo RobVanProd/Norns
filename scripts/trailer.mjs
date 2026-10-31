@@ -11,28 +11,49 @@ import { execFileSync } from 'node:child_process';
 
 const [base = 'http://localhost:5173', work = 'trailer-work', out = 'docs/trailer.mp4'] = process.argv.slice(2);
 const FPS = 30;
-const SOL = 's.solution = new N.SolutionPlayer(s.cfg.level.solution);';
-const HOVER_LEAD = "const w = s.sim.d.wyrds.filter((w) => w.st === 'walk').sort((a, b) => b.x - a.x)[0]; s.armed = 'weaver'; s.hoverPt = { x: w.x, y: w.y - 7, touch: false };";
-// at: advance (unrendered) to this tick; then: js run there; skipTo: advance again before filming
+/** Arm `skill` and hover Wyrdling `nth` (as a mouse would), so Foresight shows its branch and terrain ghost. */
+const hover = (nth, skill) => `const w = s.sim.d.wyrds[${nth}]; s.armed = '${skill}'; s.hoverPt = { x: w.x, y: w.y - 7, touch: false };`;
+// url: &solution plays the level's scripted solution from tick 0; at: advance (unrendered) to this tick;
+// then: js run there (s = the play scene); hold: the simulation stands still while visuals run; cam: pin the
+// camera (world px); rewindAt / rewindStop: frames to start and end Rewind. The bosses fight on their own
+// schedule (scripts/bosstrace.ts gives the ticks), so each shot shows a real attack with its telegraph.
+const M2 = [53, 20];
 const SHOTS = [
-  { name: 'title', url: '/', frames: 105, fadeIn: 24 },
-  { name: 'bridge', url: '/?level=m2&go', sol: true, at: 185, frames: 90, caption: 'Guide the Wyrdlings home', bar: true },
-  { name: 'foresight', url: '/?level=m2&go', at: 228, then: HOVER_LEAD, hold: true, frames: 90, caption: 'See their fate before it happens', bar: true },
-  { name: 'rewind', url: '/?level=m2&go', at: 330, frames: 90, rewindAt: 18, caption: 'Rewind when fate goes wrong', bar: true },
-  { name: 'niflheim', url: '/?level=n3&go', sol: true, at: 236, frames: 75, caption: 'Brave the frost of Niflheim' },
-  { name: 'muspelheim', url: '/?level=u4&go', sol: true, at: 480, frames: 75, caption: 'and the fires of Muspelheim' },
-  { name: 'wyrm', url: '/?level=m5&go', sol: true, at: 162, frames: 60, caption: 'Outwit three bosses' },
-  { name: 'jotunn', url: '/?level=n5&go', sol: true, at: 300, then: "const b = s.sim.d.boss; b.act = 'slam'; b.at = 0;", skipTo: 306, frames: 50 },
-  { name: 'herald', url: '/?level=u5&go', sol: true, at: 300, then: "const b = s.sim.d.boss; b.act = 'meteors'; b.at = 0;", skipTo: 318, frames: 50 },
-  { name: 'end', url: '/', frames: 120, end: true, fadeOut: 30 },
+  { name: 'title', url: '/', frames: 90, fadeIn: 24 },
+  // the lead's rising bridge climbs out over the gorge, the line following it up
+  // (the Midgard captions go up top, clear of the gorge where the lead falls in the rewind shot)
+  { name: 'bridge', url: '/?level=m2&go&solution', at: 395, cam: M2, frames: 105, caption: 'Guide the Wyrdlings home', bar: true, top: true },
+  // a Weaver armed over the lead: its rising bridge as a ghost, and the fates it changes
+  { name: 'foresight', url: '/?level=m2&go', at: 292, cam: M2, then: hover(0, 'weaver') + ' s.projectKey = true;', hold: true, frames: 75, caption: 'See their fate before it happens', bar: true, top: true },
+  // with no calling the lead drowns in the gorge; Rewind takes the run back
+  { name: 'rewind', url: '/?level=m2&go', at: 326, cam: M2, frames: 84, rewindAt: 28, rewindStop: 56, caption: 'Rewind when fate goes wrong', bar: true, top: true },
+  // paused with a Warden armed over the lead on the plate: the verdict line weighs the whole run. 69 frames so
+  // the cut to Niflheim (frame 423, 14.1 s) lands where the title song's A section comes in (the rewind's tape
+  // slow-down pushes it from 13.8 s to 14.1 s, as measured; re-check it if an earlier shot changes)
+  { name: 'verdict', url: '/?level=n3&go', at: 170, cam: [0, 60], then: hover(0, 'warden') + ' s.projectKey = true; s.togglePause();', frames: 69, caption: 'Pause, and weigh every choice', bar: true },
+  // the Warden holds the plate and the hopper pours its snow into the chasm
+  { name: 'niflheim', url: '/?level=n3&go&solution', at: 190, cam: [60, 50], frames: 70, caption: 'Brave the frost of Niflheim' },
+  // the boulder rolls into the cracked hollow, breaks through (tick 393) and lands in the fire (424), which
+  // hardens around it before the fade (caption up top, clear of the lava pool)
+  { name: 'muspelheim', url: '/?level=u2&go&solution', at: 356, cam: [40, 60], frames: 94, caption: 'and the fires of Muspelheim', top: true },
+  // zoomed in one step (as the + key does): the Wyrm rears and spits two globs of venom (ticks 454, 463) that
+  // arc over the arena onto their red rings on the floor (520, 530); the Wyrm is in view throughout
+  { name: 'wyrm', url: '/?level=m5&go&solution', at: 452, cam: [213, 104], then: 's.input.h.zoom(1);', frames: 86, caption: 'Outwit three bosses' },
+  // the Jötunn's fist over the yard, its crush ring on the ground, as a Seiðr beam strikes him
+  // (caption up top: the attack lands on the floor)
+  { name: 'jotunn', url: '/?level=n5&go&solution', at: 700, frames: 55, caption: 'Every attack is foretold', top: true },
+  // the Herald's meteors, each landing on its marked ring
+  { name: 'herald', url: '/?level=u5&go&solution', at: 165, frames: 55 },
+  { name: 'end', url: '/', frames: 110, end: true, fadeOut: 30 },
 ];
 
 const CSS = `
-  .hud-top, .hint, .fate, .vision-banner, #caption { display: none !important; }
+  .hud-top, .hint, .fate, .notice, .hud-notes, .vision-banner, #caption { display: none !important; }
   body:not(.tr-bar) .hud-bottom { display: none !important; }
   .title-screen .menu, .title-screen .foot { visibility: hidden !important; }
   body.tr-endcard .title-screen { visibility: hidden !important; }
   body.tr-bar #tr-cap { bottom: 132px; }
+  body.tr-top #tr-cap { top: 132px; bottom: auto; }
   #tr-fade { position: fixed; inset: 0; background: #000; opacity: 0; z-index: 50; pointer-events: none; }
   #tr-cap { position: fixed; left: 0; right: 0; bottom: 78px; text-align: center; z-index: 40; pointer-events: none;
     font: 700 46px 'Pixelify Sans', monospace; color: #ffd76a; letter-spacing: 1px;
@@ -47,6 +68,10 @@ rmSync(work, { recursive: true, force: true });
 mkdirSync(work, { recursive: true });
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+// a fresh profile with tutorial hints off: no level tips, and no lesson pauses the game mid-shot
+await page.addInitScript(() => {
+  if (!localStorage.getItem('norns.save.v1')) localStorage.setItem('norns.save.v1', JSON.stringify({ v: 1, settings: { hints: false } }));
+});
 const problems = [];
 page.on('pageerror', (e) => problems.push(e.message));
 // (don't edit source files while this runs: Vite's HMR would reload the page mid-shot)
@@ -58,26 +83,32 @@ for (const shot of SHOTS) {
   await page.goto(base + shot.url, { waitUntil: 'load' });
   await page.waitForFunction(() => window.__norns?.scene()?.state === 'play' || window.__norns?.scene()?.cfg?.mode === 'attract', null, { timeout: 60000 });
   await page.waitForTimeout(600); // fonts and the title DOM settle
-  await page.evaluate(({ shot, CSS, SOL }) => {
+  await page.evaluate(({ shot, CSS }) => {
     const N = window.__norns, s = N.scene();
     N.manual(true);
     const st = document.createElement('style'); st.textContent = CSS; document.head.append(st);
     document.body.classList.toggle('tr-bar', !!shot.bar);
+    document.body.classList.toggle('tr-top', !!shot.top);
     document.body.classList.toggle('tr-endcard', !!shot.end);
     for (const id of ['tr-fade', 'tr-cap']) { const d = document.createElement('div'); d.id = id; document.body.append(d); }
     const end = document.createElement('div'); end.id = 'tr-end';
-    end.innerHTML = '<img src="/docs/images/logo.png" alt=""><div class="a">Free to play in your browser</div><div class="b">github.com/RobVanProd/Norns</div>';
+    end.innerHTML = '<img src="/docs/images/logo.png" alt=""><div class="a">Free to play in your browser</div><div class="b">robvanprod.github.io/Norns</div>';
     document.body.append(end);
-    if (s.hintQueue) { s.hintQueue = []; s.hintCooldown = 1e9; }
-    if (shot.sol) new Function('s', 'N', SOL)(s, N);
+    if (s.cfg.mode === 'play') {
+      s.cfg.hints = false;
+      s.pendingTip = null;
+      s.hud?.hideHint();
+      // Foresight jobs finish every frame, so the threads don't depend on how fast this machine is
+      s.debugFullForesight = true;
+    }
+    if (shot.cam) s.debugCam = { x: shot.cam[0], y: shot.cam[1] };
     if (shot.at) s.debugAdvance(shot.at - s.sim.d.tick);
     if (shot.then) new Function('s', 'N', shot.then)(s, N);
-    if (shot.skipTo) s.debugAdvance(shot.skipTo - s.sim.d.tick);
-    // warm up (Foresight, branch preview, particles) without moving the simulation
+    // warm up (Foresight, branch preview, verdict, particles) without moving the simulation
     s.debugHold = true;
     for (let i = 0; i < 12; i++) N.step(1 / 60);
     s.debugHold = !!shot.hold;
-  }, { shot, CSS, SOL });
+  }, { shot, CSS });
   if (shot.end) await page.waitForFunction(() => document.querySelector('#tr-end img')?.complete);
   for (let i = 0; i < shot.frames; i++) {
     await page.evaluate(({ shot, i }) => {
@@ -94,6 +125,7 @@ for (const shot of SHOTS) {
       end.style.display = shot.end ? 'flex' : 'none';
       if (shot.end) end.style.opacity = String(Math.min(1, i / 12));
       if (shot.rewindAt !== undefined && i === shot.rewindAt) s.setRewind(true);
+      if (shot.rewindStop !== undefined && i === shot.rewindStop) s.setRewind(false);
       N.step(1 / 60); N.step(1 / 60);
     }, { shot, i });
     await page.screenshot({ path: `${work}/f${String(frame).padStart(5, '0')}.png` });
@@ -109,7 +141,7 @@ await audioPage.route('**/@vite/client', (r) => r.fulfill({ contentType: 'applic
 await audioPage.goto(base + '/preview/audio.html', { waitUntil: 'load' });
 await audioPage.waitForTimeout(1500);
 const rw = SHOTS.find((s) => s.name === 'rewind');
-const tRewind = starts.rewind + rw.rewindAt / FPS, tRewindEnd = starts.rewind + rw.frames / FPS;
+const tRewind = starts.rewind + rw.rewindAt / FPS, tRewindEnd = starts.rewind + (rw.rewindStop ?? rw.frames) / FPS;
 const tBoss = starts.wyrm, tEnd = starts.end;
 const tracks = await audioPage.evaluate(async ({ titleSec, bossSec, tRewind, tRewindEnd }) => {
   const A = await import('/src/audio/index.ts');
