@@ -18,6 +18,7 @@ uniform sampler2D uBack;
 uniform vec4 uView;
 uniform vec2 uLevel;
 uniform float uTime;
+uniform float uClear;
 out vec4 outColor;
 
 // Outside the level the terrain continues as its edge pixel, so boundary rows never get
@@ -39,6 +40,27 @@ void main() {
   int m = matAt(p);
   int u = ((p.x % 64) + 64) % 64;
   int v = ((p.y % 64) + 64) % 64;
+  if (uClear > 0.5) {
+    // Clear Sight: terrain by what a calling can do to it. Diggable ground keeps its texture only as light
+    // and shade under one sandy tint; rune-iron and gates (nothing digs them) are steel blue and hatched,
+    // so the difference never rests on colour alone; brittle ground (it gives way) is speckled red. Air is
+    // air, cave or sky: left empty, without the back wall or the hanging decorations (no collision).
+    if (m == 0) discard;
+    float l = dot(atl(m, u, v).rgb, vec3(0.299, 0.587, 0.114));
+    vec3 c;
+    if (m == 3 || m == 8) {
+      c = vec3(0.42, 0.55, 0.8) * (0.75 + 0.5 * l);
+      if (((p.x + p.y) & 3) == 0) c *= 0.55;
+    } else {
+      c = vec3(0.8, 0.66, 0.46) * (0.55 + 0.6 * l);
+      if (m == 7 && ((p.x * 3 + p.y * 5) % 7) == 0) c = vec3(0.95, 0.3, 0.25);
+    }
+    // a light top edge where ground can be stood on, a dark one elsewhere: shapes read at a glance
+    if (matAt(p + ivec2(0, -1)) == 0) c = mix(c, vec3(1.0), 0.45);
+    else if (matAt(p + ivec2(0, 1)) == 0 || matAt(p + ivec2(-1, 0)) == 0 || matAt(p + ivec2(1, 0)) == 0) c *= 0.55;
+    outColor = vec4(c, 1.0);
+    return;
+  }
   if (m == 4) {
     // falling grains: a run of sand/snow that ends in air (resting on nothing) is drawn as a
     // sparkling powder instead of a solid slab; about half its pixels show what is behind it
@@ -134,7 +156,7 @@ export class TerrainLayer {
       fragmentShader: FRAG,
       uniforms: {
         uMask: { value: this.maskTex }, uMat: { value: matAtlas }, uBack: { value: backWall },
-        uView: { value: view }, uLevel: { value: new THREE.Vector2(this.w, this.h) }, uTime: { value: 0 },
+        uView: { value: view }, uLevel: { value: new THREE.Vector2(this.w, this.h) }, uTime: { value: 0 }, uClear: { value: 0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -182,6 +204,11 @@ export class TerrainLayer {
 
   setTime(t: number): void {
     this.material.uniforms.uTime.value = t;
+  }
+
+  /** Clear Sight: shade terrain by class (diggable, indestructible, brittle) instead of by material art. */
+  setClear(on: boolean): void {
+    this.material.uniforms.uClear.value = on ? 1 : 0;
   }
 
   dispose(): void {

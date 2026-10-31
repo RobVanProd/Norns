@@ -11,7 +11,7 @@ import { TerrainLayer } from '../render/terrainLayer';
 import { SLAM_CRUSH, STONE_COOLDOWN, bossCore, bossPhase, magmaLevel, nextAttack, nextStone, surfaceY } from '../sim/boss';
 import { SKILL_INFO, TICK_RATE, type SkillId } from '../sim/constants';
 import { compareFates, type Fate, type FateDelta, type FateEnd, type Ghost } from '../sim/foresight';
-import type { Sim } from '../sim/sim';
+import { SPAWN_START, type Sim } from '../sim/sim';
 import type { Hazard, SimEvent, Wyrd, WyrdState } from '../sim/state';
 import { isAlive } from '../sim/state';
 
@@ -34,6 +34,8 @@ export interface ViewInput {
   pointer?: { x: number; y: number; id: number } | null;
   /** Skuld's Vision: where (and when, and which) callings happen */
   marks?: MarkView[];
+  /** Clear Sight: only what the physics cares about (flat light, wiring, timers, terrain by class) */
+  clearSight?: boolean;
 }
 
 /** A staged-Vision marker on the terrain: where a calling happens, a countdown to when, and maybe which. */
@@ -136,6 +138,12 @@ export class GameView {
   /** the last frame drew a sacrifice label ("1 lost · 3 saved later"), for the lesson that explains it */
   sacrifice = false;
   private atmoT = 0;
+  /** the level's ambient light, given back when Clear Sight ends */
+  private ambient: [number, number, number];
+  /** Clear Sight is on: no light sprites, decor, parallax or particles; terrain shaded by class */
+  private clear = false;
+  /** the vignette Clear Sight set aside */
+  private vignette = 0;
 
   constructor(p: Pipeline, art: ArtBundle, sim: Sim) {
     this.p = p;
@@ -197,7 +205,8 @@ export class GameView {
 
     const amb = bgSet.ambient;
     const lvlAmb = (sim.L.def as { ambient?: [number, number, number] }).ambient;
-    p.ambient.setRGB(...(lvlAmb ?? amb));
+    this.ambient = [...(lvlAmb ?? amb)];
+    p.ambient.setRGB(...this.ambient);
 
     // debris colours per material from the atlas params row
     const ctx = art.materials[realm].getContext('2d')!;
@@ -216,6 +225,8 @@ export class GameView {
   }
 
   dispose(): void {
+    // the pipeline outlives this view: give back the vignette Clear Sight set aside
+    this.setClear(false);
     this.terrain.dispose();
     this.bg.dispose();
     for (const l of this.liquids) l.dispose();
@@ -250,6 +261,8 @@ export class GameView {
   }
 
   private light(x: number, y: number, radius: number, r: number, g: number, b: number, k = 1): void {
+    // Clear Sight lights everything evenly (white ambient, no light sprites)
+    if (this.clear) return;
     const s = (radius * 2) / 64;
     this.lights.push({ x: 0, y: 0, w: 64, h: 64, ax: 32, ay: 32 }, x, y, { sx: s, sy: s, r: r * k, g: g * k, b: b * k, a: 1, smooth: true });
   }
@@ -363,6 +376,7 @@ export class GameView {
 
   draw(inp: ViewInput): void {
     const { sim, time } = inp;
+    this.setClear(!!inp.clearSight);
     this.terrain.sync(sim.terrain);
     this.terrain.setTime(time);
     this.bg.setTime(time);
@@ -376,6 +390,8 @@ export class GameView {
 
     for (const b of [this.behind, this.ents, this.actors, this.front, this.lights, this.glow, this.over]) b.begin();
 
+    // first in the overlay, so threads, markers and popups stay on top of it
+    if (this.clear) this.drawClearSight(sim, time);
     this.drawEntities(sim, time);
     this.drawBodies(sim);
     this.drawBoss(sim, time);
@@ -402,12 +418,142 @@ export class GameView {
     for (const b of [this.behind, this.ents, this.actors, this.front, this.lights, this.glow, this.over]) b.end();
   }
 
+  /** Clear Sight on or off: flat light, no backdrop or particles, terrain shaded by class. */
+  private setClear(on: boolean): void {
+    if (on === this.clear) return;
+    this.clear = on;
+    this.terrain.setClear(on);
+    // sky and parallax go too: all air is the same flat black
+    for (const m of this.bg.meshes) m.visible = !on;
+    this.debris.points.visible = !on;
+    this.sparks.points.visible = !on;
+    // with no light sprites drawn, a white ambient leaves every pixel at full light
+    if (on) this.p.ambient.setRGB(1, 1, 1);
+    else this.p.ambient.setRGB(...this.ambient);
+    if (on) { this.vignette = this.p.post.vignette; this.p.post.vignette = 0; }
+    else this.p.post.vignette = this.vignette;
+  }
+
+  /**
+   * Clear Sight's overlay, the hidden information the art can bury: where a Wyrdling dies (liquids,
+   * spikes, fire jets) tinted red; wiring from each plate and lever to the gates and fire jets it drives,
+   * lit and flowing while it is on; each fire jet's cycle with the seconds to its next change; and at the
+   * entrance how many are still to come and when the next one drops.
+   */
+  private drawClearSight(sim: Sim, time: number): void {
+    const O = this.over, W = this.atlas.white, L = sim.L, d = sim.d, tick = d.tick;
+    const HAZ: Rgb = [1, 0.25, 0.2];
+    // liquids: the deadly box (2 px under the surface down, see Sim.liquidAt), over open air only
+    for (const l of L.liquids) {
+      for (let x = l.x; x < l.x + l.w; x++) {
+        for (let y = l.y + 2; y < l.y + l.h;) {
+          if (sim.terrain.get(x, y) !== 0) { y++; continue; }
+          let y1 = y;
+          while (y1 < l.y + l.h && sim.terrain.get(x, y1) === 0) y1++;
+          O.rect(W, x, y, 1, y1 - y, HAZ[0], HAZ[1], HAZ[2], 0.35);
+          y = y1;
+        }
+      }
+      for (let x = l.x; x < l.x + l.w; x += 4) if (sim.terrain.get(x, l.y + 2) === 0) O.rect(W, x, l.y + 2, 2, 1, HAZ[0], HAZ[1], HAZ[2], 0.9);
+    }
+    for (const s of L.spikes) O.rect(W, s.x, s.y - 5, s.w, 6, HAZ[0], HAZ[1], HAZ[2], 0.45);
+    // gates: their whole box, so an open gate still shows where it closes
+    L.gates.forEach((g) => this.dashBox(g.x, g.y, g.w, g.h, [0.55, 0.7, 1], 0.8));
+    // wiring, routed over the top: up from the switch, across, down onto what it drives
+    const WIRE_ON: Rgb = [0.45, 1, 0.95], WIRE_OFF: Rgb = [0.4, 0.55, 0.62];
+    type Source = { x: number; y: number; on: boolean };
+    const plate = (i: number): Source => ({ x: Math.round(L.plates[i].x + L.plates[i].w / 2), y: L.plates[i].y - 2, on: d.plates[i] });
+    const lever = (i: number): Source => ({ x: L.levers[i].x, y: L.levers[i].y - 8, on: d.levers[i] });
+    const source = (id: string): Source | null => {
+      const pi = L.plates.findIndex((p) => p.id === id);
+      if (pi >= 0) return plate(pi);
+      const li = L.levers.findIndex((l) => l.id === id);
+      return li >= 0 ? lever(li) : null;
+    };
+    const wire = (s: Source, tx: number, ty: number): number => {
+      // the bus runs clear over the heads of Wyrdlings walking at either end
+      const bus = Math.max(4, Math.min(s.y, ty) - 18);
+      const c = s.on ? WIRE_ON : WIRE_OFF;
+      this.wirePath([[s.x, s.y], [s.x, bus], [tx, bus], [tx, ty]], c, s.on ? Math.floor(time * 16) : 0);
+      O.rect(W, s.x - 1, s.y - 1, 3, 3, c[0], c[1], c[2], 1);
+      return bus;
+    };
+    L.gates.forEach((g, i) => {
+      if (!g.links.length) return;
+      const gx = Math.round(g.x + g.w / 2);
+      let bus = Infinity, on = 0;
+      for (const l of g.links) {
+        const s = l.kind === 'plate' ? plate(l.idx) : lever(l.idx);
+        bus = Math.min(bus, wire(s, gx, g.y - 2));
+        if (s.on) on++;
+      }
+      this.arrowTip(gx, g.y - 2, d.gates[i].open > 0 ? WIRE_ON : WIRE_OFF);
+      // the gate's logic, where it is not just "this switch opens it"
+      const n = g.links.length;
+      const label = `${g.invert ? 'NOT ' : ''}${n > 1 ? `${g.mode === 'all' ? 'ALL' : 'ANY'} ${on}/${n}` : ''}`.trim();
+      if (label) this.text(O, label, gx, bus - 10, WIRE_ON[0], WIRE_ON[1], WIRE_ON[2], 1);
+    });
+    // fire jets: the deadly column, its cycle, and the switch that cuts its gas
+    L.firejets.forEach((f, i) => {
+      const st = sim.firejetState(i);
+      const cut = !!f.links?.some((id) => sim.linkOn(id));
+      // (the wire stops above the cycle bar and its seconds)
+      for (const id of f.links ?? []) { const s = source(id); if (s) wire(s, f.x, f.y - f.h - 19); }
+      if (st === 2) O.rect(W, f.x - 5, f.y - f.h, 11, f.h, HAZ[0], HAZ[1], HAZ[2], 0.4);
+      else this.dashBox(f.x - 5, f.y - f.h, 11, f.h, st === 1 ? [1, 0.6, 0.25] : HAZ, 0.7);
+      const P = f.on + f.off, cyc = (tick + (f.phase ?? 0)) % P, BW = 22, bx = f.x - (BW >> 1), by = f.y - f.h - 6;
+      O.rect(W, bx - 1, by - 1, BW + 2, 4, 0.05, 0.03, 0.08, 0.85);
+      O.rect(W, bx, by, BW, 2, 0.35, 0.33, 0.38, 1);
+      O.rect(W, bx, by, Math.max(1, Math.round((f.on / P) * BW)), 2, HAZ[0], HAZ[1], HAZ[2], cut ? 0.35 : 1);
+      if (cut) { this.text(O, 'OFF', f.x, by - 10, WIRE_ON[0], WIRE_ON[1], WIRE_ON[2], 1); return; }
+      const warn = Math.round(((P - 15) / P) * BW);
+      O.rect(W, bx + warn, by, BW - warn, 2, 1, 0.6, 0.25, 1);
+      O.rect(W, bx + Math.min(BW - 1, Math.floor((cyc / P) * BW)), by - 1, 1, 4, 1, 1, 1, 1);
+      const left = st === 2 ? f.on - cyc : P - cyc;
+      this.text(O, (left / TICK_RATE).toFixed(1), f.x, by - 10, st === 2 ? 1 : 0.95, st === 2 ? 0.45 : 0.9, st === 2 ? 0.35 : 0.8, 1);
+    });
+    // the entrance: still to come, and the seconds to the next drop (a Wyrdling every `rate` ticks from SPAWN_START)
+    const en = L.entrance, toCome = L.def.wyrdlings - d.spawned;
+    let next = 0;
+    if (toCome > 0) next = tick < SPAWN_START ? SPAWN_START - tick : (L.def.rate - ((tick - SPAWN_START) % L.def.rate)) % L.def.rate;
+    this.text(O, toCome > 0 ? `${toCome} to come` : 'all out', en.x, en.y - 34, 1, 0.92, 0.7, 1);
+    if (toCome > 0) this.text(O, `next ${(next / TICK_RATE).toFixed(1)}s`, en.x, en.y - 25, 0.8, 0.85, 0.9, 1);
+  }
+
+  /** A 1 px dashed outline round a box (the dashes 2 on, 2 off), on a dark shadow. */
+  private dashBox(x: number, y: number, w: number, h: number, c: Rgb, a: number): void {
+    const x1 = x + w, y1 = y + h;
+    this.wirePath([[x - 1, y - 1], [x1, y - 1], [x1, y1], [x - 1, y1], [x - 1, y - 1]], c, 0, a);
+  }
+
+  /** A dashed path along horizontal and vertical legs; the dashes move forward as `phase` grows. */
+  private wirePath(pts: [number, number][], c: Rgb, phase: number, a = 1): void {
+    const O = this.over, W = this.atlas.white;
+    let k = -phase;
+    for (let i = 1; i < pts.length; i++) {
+      const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+      const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)), sx = Math.sign(x1 - x0), sy = Math.sign(y1 - y0);
+      for (let j = 0; j < n; j++, k++) {
+        if ((((k % 4) + 4) % 4) >= 2) continue;
+        const x = x0 + sx * j, y = y0 + sy * j;
+        O.rect(W, x + 1, y + 1, 1, 1, 0.05, 0.03, 0.08, 0.8 * a);
+        O.rect(W, x, y, 1, 1, c[0], c[1], c[2], a);
+      }
+    }
+  }
+
+  /** A small arrowhead pointing down, its tip at (x, y). */
+  private arrowTip(x: number, y: number, c: Rgb): void {
+    for (const [dy, w] of [[-2, 5], [-1, 3], [0, 1]] as const) this.over.rect(this.atlas.white, x - (w >> 1), y + dy, w, 1, c[0], c[1], c[2], 1);
+  }
+
   private drawEntities(sim: Sim, time: number): void {
     const L = sim.L, tick = sim.d.tick, E = this.ents;
     const def = L.def;
     // decor + level lights
     for (const e of def.entities) {
       if (e.type === 'decor') {
+        if (this.clear) continue;
         const n = this.frames(e.sprite);
         E.push(this.f(e.sprite, Math.floor(time * 8) % Math.max(1, n)), e.x, e.y, { flip: e.flip });
         if (e.sprite === 'torch' || e.sprite === 'brazier') {

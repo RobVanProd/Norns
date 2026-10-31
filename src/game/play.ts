@@ -67,6 +67,8 @@ export interface PlayConfig {
   rewindToggle: boolean;
   /** Assist: while paused, say what the hovered calling comes to if nothing more is done. */
   verdict: boolean;
+  /** Always draw Clear Sight (otherwise only while C is held); never in attract mode. */
+  clearSight: boolean;
   /** Vision mode: play this Weave (the player's own best) instead of Skuld's solution. */
   replay?: Weave;
   /** Skuld's Vision (no replay): how much of the quota route it shows (see vision.ts); default 4, all of it. */
@@ -953,6 +955,8 @@ export class PlayScene {
       projecting: this.projectKey || this.projectTouch, touch: !!this.hoverPt?.touch,
       // the doom lesson's arrow, until its Wyrdling's new fate is on screen instead
       pointer: this.doomPointer && !(this.branch && this.hover === this.doomPointer.id) ? this.doomPointer : null, marks: this.markViews(),
+      // the title and map backgrounds stay as they are
+      clearSight: this.cfg.mode !== 'attract' && (this.cfg.clearSight || !!this.input?.held.has('KeyC')),
     });
     // the first sacrifice label ("1 lost · 3 saved later") gets a word on what it means
     if (this.view.sacrifice && this.teach('sacrifice')) {
