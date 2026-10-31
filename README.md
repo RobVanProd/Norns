@@ -115,22 +115,25 @@ deterministic, so Foresight also predicts exactly who an attack will hit.
 | Foresight on/off | `V` | eye button |
 | Menu | `Esc` (when no calling is armed) | home button |
 
-## Three realms, fifteen levels, three bosses
+## Three realms, eighteen levels, three bosses
 
 | Midgard | Niflheim | Muspelheim |
 |---|---|---|
 | 1. First Threads | 1. Frozen Steps | 1. Ember Road |
-| 2. The Weaver's Bridge | 2. Glacier Depths | 2. Stepping Stones |
+| 2. The Weaver's Bridge | 2. Glacier Depths | 2. The Cracked Floor |
 | 3. Hold the Line | 3. Avalanche Pass | 3. The Forge |
-| 4. Roots and Wings | 4. Rime Gate | 4. Surtr's Gate |
+| 4. Through the Stone | 4. Rime Gate | 4. Surtr's Gate |
+| 5. Climb, Little Thread | | |
+| 6. Fall Like a Leaf | | |
+| 7. Roots and Wings | | |
 | **Boss: The Gnawing Wyrm** | **Boss: Hrímgrímnir, the Frost Jötunn** | **Boss: Surtr's Herald** |
 
 Puzzles are built from physical pieces:
 
 - destructible pixel terrain, and falling sand and snow;
-- rolling boulders that bowl Wyrdlings over, press plates, and cool into stepping stones in lava;
+- rolling boulders that bowl Wyrdlings over, crack thin floors, and cool into stepping stones in lava;
 - plates and levers wired to gates and bridges;
-- snow hoppers, updrafts, crushers, and gas flames that a rune blast can wreck;
+- snow hoppers, updrafts that carry gliders, and gas flames that burn in turn;
 - water and lava.
 
 | Niflheim: a snow hopper pours powder into a pit | Muspelheim: a column of Wyrdlings descends past lava falls |

@@ -48,6 +48,17 @@ export interface SaveData {
 
 const KEY = 'norns.save.v1';
 
+/** The level order of the first release, whose saves have no opened list: there a level opened when the
+ *  one before it in this order was cleared. Fixed here because today's realms insert levels into it. */
+const LEGACY_ORDER = ['m1', 'm2', 'm3', 'm4', 'm5', 'n1', 'n2', 'n3', 'n4', 'n5', 'u1', 'u2', 'u3', 'u4', 'u5'];
+
+/** What the first release had open for these stars: the first level, every cleared one and each one
+ *  that followed a cleared one. */
+function legacyOpened(stars: Record<string, number>): string[] {
+  const done = (id: string) => ((stars[id] ?? 0) & 1) === 1;
+  return LEGACY_ORDER.filter((id, i) => i === 0 || done(id) || done(LEGACY_ORDER[i - 1]));
+}
+
 function fresh(): SaveData {
   const s: SaveData = {
     v: 1, stars: {}, best: {}, threads: 0, upgrades: { foresight: 0 }, hood: 'teal', hoods: ['teal'], opened: [],
@@ -65,12 +76,14 @@ export function loadSave(): SaveData {
     const d = JSON.parse(raw) as Partial<SaveData> & { upgrades?: { rewind?: number } };
     const f = fresh();
     const refund = RETIRED_REWIND_COSTS.slice(0, d.upgrades?.rewind ?? 0).reduce((a, b) => a + b, 0);
+    const stars = d.stars ?? {};
     const s = {
-      ...f, ...d, threads: (d.threads ?? 0) + refund, stars: d.stars ?? {}, opened: Array.isArray(d.opened) ? d.opened : [],
+      ...f, ...d, threads: (d.threads ?? 0) + refund, stars,
+      // a save with no opened list keeps what the old linear order opened; today's rules add to it below
+      opened: Array.isArray(d.opened) ? d.opened : legacyOpened(stars),
       weaves: d.weaves && typeof d.weaves === 'object' ? d.weaves : {},
       upgrades: { foresight: d.upgrades?.foresight ?? f.upgrades.foresight }, settings: { ...f.settings, ...d.settings },
     } as SaveData;
-    // older saves have no opened list: pin down what their stars open today
     refreshOpened(s);
     return s;
   } catch {
@@ -112,9 +125,10 @@ function puzzles(r: RealmInfo): LevelDef[] {
 function openNow(s: SaveData, realms: RealmInfo[], ri: number, level: LevelDef): boolean {
   const ps = puzzles(realms[ri]);
   if (level.boss) return ps.filter((l) => cleared(s, l.id)).length >= Math.min(BOSS_NEEDS, ps.length);
-  // clearing a puzzle opens the next two in its realm
+  // clearing a puzzle opens the next two in its realm. A cleared puzzle stays open, and so does one
+  // added before it later (in play that order is already open, so this only reaches inserted levels).
   const i = ps.indexOf(level);
-  return i === 0 || ps.slice(Math.max(0, i - 2), i).some((l) => cleared(s, l.id));
+  return i === 0 || ps.slice(Math.max(0, i - 2)).some((l) => cleared(s, l.id));
 }
 
 /** A realm opens when the previous realm's guardian falls, or when all of its puzzles are cleared. */

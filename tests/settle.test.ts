@@ -14,6 +14,7 @@ import { SolutionPlayer } from '../src/sim/solution';
 import type { SimData, Wyrd } from '../src/sim/state';
 import type { Terrain } from '../src/sim/terrain';
 import { flatLevel } from './helpers';
+import { LEGACY_M2, LEGACY_N3, LEGACY_N4 } from './levels-legacy';
 
 const level = (id: string): LevelDef => ALL_LEVELS.find((l) => l.id === id)!;
 const SOLUTION_MAX = 30 * 60 * 8;
@@ -176,8 +177,8 @@ describe('loop detector', () => {
   describe('proves stalemates within 10 s of their start', () => {
     const cases: [string, LevelDef, SolutionStep[]][] = [
       ['n3 null run', level('n3'), []],
-      ['n4 null run', level('n4'), []],
-      ['m2, second Weaver at x=320', level('m2'), [{ nth: 0, x: 196, skill: 'weaver' }, { nth: 0, x: 320, dir: 1, skill: 'weaver' }]],
+      ['wave-1 n4 null run', LEGACY_N4, []],
+      ['wave-1 m2, second Weaver at x=320', LEGACY_M2, [{ nth: 0, x: 196, skill: 'weaver' }, { nth: 0, x: 320, dir: 1, skill: 'weaver' }]],
     ];
     for (const [name, def, steps] of cases) {
       it(name, () => {
@@ -201,14 +202,14 @@ describe('loop detector', () => {
       report(`${id} null run`, r);
       holds(r.sim, r.det.loop!, 300, `${id} null run`);
     }
-  });
+  }, 30_000); // about 3 s alone, but it has passed 5 s in a loaded full run
 
   describe('proves cycles apart', () => {
-    // n3, a Warden granted to the first Wyrdling at tick 405, short of the plate: five pace between the
-    // wall and the Warden (246 ticks a lap) and press the plate, so the gate opens and shuts forever; six
-    // fell into the pit and pace there (76 ticks). The whole run repeats only every 12,032 ticks.
+    // n3 as it shipped in wave 1, a Warden granted to the first Wyrdling at tick 405, short of the plate: five
+    // pace between the wall and the Warden (246 ticks a lap) and press the plate, so the gate opens and shuts
+    // forever; six fell into the pit and pace there (76 ticks). The whole run repeats only every 12,032 ticks.
     const n3 = (): Sim => {
-      const sim = Sim.create(level('n3'));
+      const sim = Sim.create(LEGACY_N3);
       while (sim.d.tick < 405) sim.step();
       expect(sim.assign(0, 'warden')).toBe(true);
       return sim;
@@ -235,7 +236,7 @@ describe('loop detector', () => {
       // every Warden and Leaper the first six Wyrdlings could be granted at a few moments, proven or not
       let proofs = 0, compared = 0;
       for (const T of [300, 500]) {
-        const base = Sim.create(level('n3'));
+        const base = Sim.create(LEGACY_N3);
         while (base.d.tick < T) base.step();
         for (const w of base.d.wyrds.slice(0, 6)) {
           for (const skill of ['warden', 'leaper'] as const) {

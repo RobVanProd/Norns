@@ -1,7 +1,8 @@
 // Level and realm unlocks (src/game/save.ts): clearing a level at quota opens the next two in its
 // realm, a guardian needs three of its realm's puzzles, a realm opens when the previous guardian falls
 // or all its puzzles are cleared, and no unlock ever depends on second or third stars. Unlocks follow
-// level ids and stick, so adding a level to a realm never relocks a save.
+// level ids and stick, so adding a level to a realm never relocks a save, and a save from the first
+// release (which opened levels in one global order and kept no opened list) keeps what it had open.
 import { afterEach, describe, expect, it } from 'vitest';
 import { ALL_LEVELS, REALM_LIST, type RealmInfo } from '../src/levels';
 import { BOSS_NEEDS, isUnlocked, loadSave, realmUnlocked, recordOutcome, type Outcome, type SaveData } from '../src/game/save';
@@ -36,6 +37,9 @@ function clear(s: SaveData, id: string, o: Partial<Outcome> = {}) {
 const openIds = (s: SaveData, realms: RealmInfo[] = REALM_LIST): string[] =>
   realms.flatMap((r) => r.levels).filter((l) => isUnlocked(s, l.id, realms)).map((l) => l.id);
 
+/** Midgard's puzzles in play order (m1, m2, m3, m3b, ...). */
+const MIDGARD_PUZZLES = REALM_LIST[0].levels.filter((l) => !l.boss).map((l) => l.id);
+
 /** Midgard with a new puzzle inserted after m2, as a later content update might ship it. */
 function withInserted(): RealmInfo[] {
   const extra: LevelDef = { ...level('m2'), id: 'm2b', name: 'A Thread Added Later' };
@@ -58,7 +62,7 @@ describe('progression', () => {
     expect(out.opened).toEqual(['m2', 'm3']);
     expect(openIds(s)).toEqual(['m1', 'm2', 'm3']);
     clear(s, 'm3');
-    expect(openIds(s)).toEqual(['m1', 'm2', 'm3', 'm4']);
+    expect(openIds(s)).toEqual(['m1', 'm2', 'm3', 'm3b', 'm3c']);
   });
 
   it('opens nothing for a run below the quota, however many stars it would otherwise earn', () => {
@@ -97,9 +101,9 @@ describe('progression', () => {
 
   it("opens the next realm when all of the previous realm's puzzles are cleared, guardian or not", () => {
     const s = newSave();
-    for (const id of ['m1', 'm2', 'm3']) clear(s, id);
+    for (const id of MIDGARD_PUZZLES.slice(0, -1)) clear(s, id);
     expect(realmUnlocked(s, 1)).toBe(false);
-    clear(s, 'm4');
+    clear(s, MIDGARD_PUZZLES[MIDGARD_PUZZLES.length - 1]);
     expect(realmUnlocked(s, 1)).toBe(true);
     expect(isUnlocked(s, 'n1')).toBe(true);
     expect(isUnlocked(s, 'm5')).toBe(true);
@@ -118,9 +122,9 @@ describe('progression', () => {
     const store = stubStorage();
     const before = loadSave();
     clear(before, 'm1');
-    clear(before, 'm2'); // opens m3 and m4
+    clear(before, 'm2'); // opens m3 and m3b
     const openBefore = openIds(before);
-    expect(openBefore).toEqual(['m1', 'm2', 'm3', 'm4']);
+    expect(openBefore).toEqual(['m1', 'm2', 'm3', 'm3b']);
 
     // the game updates with a new puzzle between m2 and m3, and the stored save loads again
     const inserted = withInserted();
@@ -128,15 +132,28 @@ describe('progression', () => {
     expect(store.size).toBe(1);
     for (const id of openBefore) expect(isUnlocked(after, id, inserted), id).toBe(true);
     expect(isUnlocked(after, 'm2b', inserted)).toBe(true); // follows the cleared m2
-    // position alone would have relocked m4 (its two predecessors are now m2b and m3); the sticky
+    // position alone would have relocked m3b (its two predecessors are now m2b and m3); the sticky
     // opened list is what keeps it open
-    expect(isUnlocked({ ...after, opened: [] }, 'm4', inserted)).toBe(false);
+    expect(isUnlocked({ ...after, opened: [] }, 'm3b', inserted)).toBe(false);
+  });
+
+  it('keeps open everything a save from before the Midgard split had open', () => {
+    // wave 1 shipped Midgard as m1, m2, m3, m4 and the Wyrm; this save cleared all four, so Niflheim opened
+    const store = stubStorage();
+    const stars = { m1: 1, m2: 1, m3: 1, m4: 1 };
+    store.set('norns.save.v1', JSON.stringify({ v: 1, stars, threads: 0, opened: ['m1', 'm2', 'm3', 'm4', 'm5', 'n1'] }));
+    const s = loadSave();
+    for (const id of ['m1', 'm2', 'm3', 'm4', 'm5', 'n1']) expect(isUnlocked(s, id), id).toBe(true);
+    expect(realmUnlocked(s, 1)).toBe(true);
+    // the split's new puzzles open by the usual rule: m3b and m3c follow the cleared m3
+    expect(isUnlocked(s, 'm3b')).toBe(true);
+    expect(isUnlocked(s, 'm3c')).toBe(true);
   });
 
   it('keeps the next realm open when a puzzle is added to a realm it was opened from', () => {
     stubStorage();
     const s = loadSave();
-    for (const id of ['m1', 'm2', 'm3', 'm4']) clear(s, id); // Niflheim opens by clearing every puzzle
+    for (const id of MIDGARD_PUZZLES) clear(s, id); // Niflheim opens by clearing every puzzle
     const inserted = withInserted();
     const after = loadSave();
     expect(realmUnlocked(after, 1, inserted)).toBe(true);
@@ -144,18 +161,66 @@ describe('progression', () => {
     expect(isUnlocked(after, 'm5', inserted)).toBe(true);
   });
 
-  it('keeps everything a save from before these rules had open', () => {
-    // the old rule: a level is open if it is the very first or the level before it (in global order) is cleared
-    const oldOpen = (s: SaveData, i: number) => i === 0 || ((s.stars[ALL_LEVELS[i - 1].id] ?? 0) & 1) === 1;
-    const store = stubStorage();
-    for (let k = 0; k <= ALL_LEVELS.length; k++) {
-      const stars = Object.fromEntries(ALL_LEVELS.slice(0, k).map((l) => [l.id, 1]));
-      store.set('norns.save.v1', JSON.stringify({ v: 1, stars, threads: 0 })); // no opened list yet
-      const s = loadSave();
-      ALL_LEVELS.forEach((l, i) => { if (oldOpen(s, i)) expect(isUnlocked(s, l.id), `${k} cleared: ${l.id}`).toBe(true); });
-      // and the migration writes those unlocks down, so later inserts can't take them away
-      ALL_LEVELS.forEach((l) => { if (isUnlocked(s, l.id)) expect(s.opened, l.id).toContain(l.id); });
+  describe('saves from the first release (no opened list)', () => {
+    // The first release (origin/main, the build players have saves from) ordered its levels globally and
+    // opened a level when the one before it in that order was cleared, and a realm when the previous
+    // realm's last level was. Its order is written out here, not taken from today's realms, which insert
+    // levels into it.
+    const OLD = ['m1', 'm2', 'm3', 'm4', 'm5', 'n1', 'n2', 'n3', 'n4', 'n5', 'u1', 'u2', 'u3', 'u4', 'u5'];
+    const OLD_REALM_LAST = ['m5', 'n5'];
+    const done = (stars: Record<string, number>, id: string) => ((stars[id] ?? 0) & 1) === 1;
+    const oldOpen = (stars: Record<string, number>) => OLD.filter((_, i) => i === 0 || done(stars, OLD[i - 1]));
+
+    /** Store a save exactly as the first release wrote it, then load it. */
+    function loadOld(stars: Record<string, number>): SaveData {
+      stubStorage().set('norns.save.v1', JSON.stringify({
+        v: 1, stars, best: {}, threads: 3, upgrades: { foresight: 0, rewind: 0 }, hood: 'teal', hoods: ['teal'],
+        settings: { music: 0.7, sfx: 0.85, foresight: true, hints: true, zoom: 0, crt: false }, seenIntro: true,
+      }));
+      return loadSave();
     }
+
+    /** Nothing the first release had open, and nothing cleared, is locked now, and all of it is written down. */
+    function keepsOld(stars: Record<string, number>, name: string): SaveData {
+      const s = loadOld(stars);
+      const old = oldOpen(stars);
+      for (const id of old) expect(isUnlocked(s, id), `${name}: ${id} was open`).toBe(true);
+      for (const id of Object.keys(stars)) if (done(stars, id)) expect(isUnlocked(s, id), `${name}: ${id} cleared`).toBe(true);
+      OLD_REALM_LAST.forEach((id, ri) => { if (done(stars, id)) expect(realmUnlocked(s, ri + 1), `${name}: realm ${ri + 1}`).toBe(true); });
+      // the migration writes those unlocks down, so a later insert can't take them away
+      for (const id of old) expect(s.opened, `${name}: ${id} pinned`).toContain(id);
+      return s;
+    }
+
+    it('keeps m4 open for a player who cleared the three before it, and m4 itself once cleared', () => {
+      // today m3b, m3c and m3d sit between m3 and m4, so position alone would lock m4 here
+      let s = keepsOld({ m1: 1, m2: 1, m3: 1 }, 'm1-m3');
+      expect(openIds(s).filter((id) => id.startsWith('m'))).toEqual(['m1', 'm2', 'm3', 'm3b', 'm3c', 'm4', 'm5']);
+      s = keepsOld({ m1: 1, m2: 1, m3: 1, m4: 1 }, 'm1-m4');
+      expect(isUnlocked(s, 'm4')).toBe(true);
+      expect(isUnlocked(s, 'm5')).toBe(true);
+      expect(realmUnlocked(s, 1)).toBe(false);
+      s = keepsOld({ m1: 7, m2: 3, m3: 1, m4: 1, m5: 1 }, 'm1-m5');
+      expect(openIds(s)).toContain('n1');
+    });
+
+    it('opens the levels inserted before a cleared one', () => {
+      // m3d follows m3b and m3c, which this player never saw, but it sits before the m4 they cleared
+      const s = keepsOld({ m1: 1, m2: 1, m3: 1, m4: 1, m5: 1 }, 'all of Midgard');
+      for (const id of MIDGARD_PUZZLES) expect(isUnlocked(s, id), id).toBe(true);
+    });
+
+    it('keeps every prefix of the old order open', () => {
+      for (let k = 0; k <= OLD.length; k++) keepsOld(Object.fromEntries(OLD.slice(0, k).map((id) => [id, 1])), `first ${k}`);
+    });
+
+    it('keeps any mix of cleared Midgard levels, with or without the realms after it', () => {
+      const later: Record<string, number>[] = [{}, { n1: 1, n2: 1 }, { n1: 1, n2: 1, n3: 1, n4: 1, n5: 1, u1: 1 }];
+      for (let mask = 0; mask < 1 << 5; mask++) {
+        const mid = Object.fromEntries(OLD.slice(0, 5).filter((_, b) => mask & (1 << b)).map((id) => [id, 1]));
+        for (const rest of later) keepsOld({ ...mid, ...rest }, `${Object.keys({ ...mid, ...rest }).join(',') || 'nothing'}`);
+      }
+    });
   });
 
   it('stores the rewind mode with the other settings', () => {
