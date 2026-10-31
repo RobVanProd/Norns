@@ -45,7 +45,7 @@ export const M2: LevelDef = {
   intro: 'A gorge splits the meadow, and beyond it a rock step is too tall to walk up. Weave a golden bridge across the gorge, then a second to climb the step. Wyrdlings never walk past a busy Weaver.',
   hints: [
     'WEAVERS lay 12 rising planks. Start the gorge bridge at its very edge.',
-    'The rock step needs a second bridge, begun a few steps back from the wall. Too close and it fails.',
+    'The rock step needs a second bridge, begun a few steps back from the wall. Too close or too far and it fails.',
     'Watch the gold branch thread before you commit: it shows the new fate.',
   ],
   width: 560, height: 280, seed: 22,

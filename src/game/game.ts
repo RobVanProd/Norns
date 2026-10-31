@@ -230,15 +230,15 @@ export class Game {
     REALM_LIST.forEach((r, ri) => {
       const open = realmUnlocked(this.save, ri);
       const nodes = el('div', { class: 'nodes' });
-      const puzzles = r.levels.filter((l) => !l.boss).length;
+      const puzzles = r.levels.filter((l) => !l.boss);
       r.levels.forEach((l, li) => {
         const unlocked = open && isUnlocked(this.save, l.id);
         const mask = this.save.stars[l.id] ?? 0;
         const stars = el('div', { class: 'stars' });
         for (let k = 0; k < 3; k++) stars.append(pixelCanvas(this.art.icons[mask & (1 << k) ? 'star' : 'star_empty'], 1, 'px icon'));
         const boss = !!l.boss;
-        const why = !open ? 'Realm sealed' : boss ? `Clear ${Math.min(BOSS_NEEDS, puzzles)} of ${r.name}'s threads to wake the guardian`
-          : 'Clear one of the two threads before it';
+        const why = !open ? 'Realm sealed' : boss ? `Clear ${Math.min(BOSS_NEEDS, puzzles.length)} of ${r.name}'s threads to wake the guardian`
+          : puzzles.indexOf(l) === 1 ? 'Clear the thread before it' : 'Clear one of the two threads before it';
         const b = el('button', { class: `node${boss ? ' boss' : ''}${unlocked ? '' : ' locked'}${mask & 1 ? ' done' : ''}`, title: unlocked ? l.name : `${l.name} · ${why}` },
           el('span', { class: 'n', text: boss ? '☠' : String(li + 1) }),
           el('span', { class: 'lname', text: l.name }),
@@ -333,10 +333,12 @@ export class Game {
       if (got) setTimeout(() => audio.sfx('star', { pitch: 1 + k * 0.12 }), 250 + k * 300);
       stars.append(s);
     }
-    // Next: the following level, or else the first open one not yet cleared after it
-    const after = ALL_LEVELS.slice(ALL_LEVELS.indexOf(level) + 1);
-    const next = after[0] && isUnlocked(this.save, after[0].id) ? after[0]
-      : after.find((l) => isUnlocked(this.save, l.id) && !((this.save.stars[l.id] ?? 0) & 1));
+    // Next: the following level, or else the first open one not yet cleared after it (wrapping round,
+    // so a level skipped earlier is still offered)
+    const at = ALL_LEVELS.indexOf(level);
+    const following = ALL_LEVELS[at + 1];
+    const next = following && isUnlocked(this.save, following.id) ? following
+      : [...ALL_LEVELS.slice(at + 1), ...ALL_LEVELS.slice(0, at)].find((l) => isUnlocked(this.save, l.id) && !((this.save.stars[l.id] ?? 0) & 1));
     const buttons: [string, () => void, boolean?][] = [];
     if (won && next) buttons.push(['Next', () => this.playLevel(next), true]);
     const scene = this.scene;
@@ -541,6 +543,9 @@ export class Game {
 
   private openModal(content: HTMLElement, onDismiss?: () => void): void {
     this.closeModal();
+    // a toggled rewind has no release to stop it: left running behind a dialog it would unspool the run
+    // to its first tick unseen, and Timeline.back() drops every newer snapshot
+    this.scene?.setRewind(false);
     const m = el('div', { class: 'modal-back' }, content);
     // story, intro and results cards must not vanish on a stray click; pause and settings close to a safe state
     if (onDismiss) m.addEventListener('pointerdown', (e) => { if (e.target === m) onDismiss(); });

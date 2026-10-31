@@ -126,7 +126,8 @@ export class PlayScene {
         restart: () => hooks.restart(),
         menu: () => hooks.menu(),
       });
-      this.hintQueue = cfg.hints ? [...(cfg.level.hints ?? [])] : [];
+      // level hints speak of the default hold mode
+      this.hintQueue = cfg.hints ? (cfg.level.hints ?? []).map((h) => cfg.rewindToggle ? h.replace('Hold REWIND', 'Tap REWIND') : h) : [];
     }
     if (cfg.mode !== 'attract') this.bindInput();
   }
@@ -186,9 +187,12 @@ export class PlayScene {
       if (down && code === 'Escape') this.hooks.menu();
       return;
     }
+    if (code === 'Blur') { this.setRewind(false); return; }
+    // behind a dialog the level takes no keys but Esc: R would start a rewind nobody sees (and nothing
+    // stops in toggle mode), Space would set the level running behind the intro card or pause menu
+    if (this.hooks.dialogOpen() && code !== 'Escape') return;
     // key repeat must not restart a rewind that stopped at the first tick (or flip a toggle)
     if (code === 'KeyR' || code === 'Backspace') { if (!repeat) this.rewindInput(down); return; }
-    if (code === 'Blur') { this.setRewind(false); return; }
     if (!down || repeat) return;
     const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(code);
     if (idx >= 0) {

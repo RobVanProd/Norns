@@ -112,7 +112,11 @@ export class Hud {
       this.skillBtns.set(s, { b, n });
     }
     this.rewindBtn = el('button', { class: 'rewind', title: 'Hold to rewind (R)', 'aria-label': 'Rewind' }, icon('rewind', 3), el('span', { class: 'rsec' }));
-    const start = (e: Event) => { e.preventDefault(); e.stopPropagation(); cb.rewind(true); };
+    const start = (e: PointerEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      // only a touch or the left button: a right-click must not flip a toggled rewind
+      if (e.pointerType !== 'mouse' || e.button === 0) cb.rewind(true);
+    };
     const stop = (e: Event) => { e.preventDefault(); cb.rewind(false); };
     this.rewindBtn.addEventListener('pointerdown', start);
     this.rewindBtn.addEventListener('pointerup', stop);
@@ -190,7 +194,8 @@ export class Hud {
     this.eyeBtn.classList.toggle('on', s.foresight);
     this.pauseBtn.classList.toggle('on', s.paused);
     this.rewindBtn.classList.toggle('on', s.rewinding);
-    this.rewindBtn.title = s.rewindToggle ? 'Rewind (R): press to start, again to stop' : 'Hold to rewind (R)';
+    const rewindTitle = s.rewindToggle ? 'Rewind (R): press to start, again to stop' : 'Hold to rewind (R)';
+    if (this.rewindBtn.title !== rewindTitle) this.rewindBtn.title = rewindTitle;
     (this.rewindBtn.querySelector('.rsec') as HTMLElement).textContent = `${Math.floor(s.rewindSec)}s`;
     if (s.boss) {
       this.bossWrap.classList.add('show');

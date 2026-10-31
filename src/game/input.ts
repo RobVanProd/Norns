@@ -53,7 +53,8 @@ export class Input {
     }, { passive: false });
     on('contextmenu', (e) => e.preventDefault());
     onW('keydown', (e) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      // form controls keep their own keys (arrows and Space work a <select>); Esc still reaches the game
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName) && e.code !== 'Escape') return;
       this.held.add(e.code);
       this.h.key?.(e.code, true, e.repeat);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
